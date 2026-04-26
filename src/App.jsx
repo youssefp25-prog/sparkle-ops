@@ -167,31 +167,174 @@ export default function CleaningApp() {
     a.href = url; a.download = `report_${date}.csv`; a.click();
   };
 
-  // ===== EXCEL EXPORT FUNCTIONS =====
-  const exportDailyReportExcel = () => {
-    const dayNum = new Date(date).getDate();
-    const data = bookingsWithCalc.map(b => ({
-      'DATE': dayNum,
-      'CLEANER': b.cleaner,
-      'TIMINGS': b.timing,
-      'CLIENT': b.clientName,
-      'LOCATION': b.location,
-      'PHONE': b.phone || '',
-      'MATERIALS': b.withMaterials ? 'Yes' : 'No',
-      'HOURS': b.hours,
-      'RATE': b.pricePerHour,
-      'TOTAL': b.total.toFixed(2),
-      'PAY TYPE': b.paymentType,
-      'STATUS': b.paymentStatus || 'PENDING'
-    }));
-    // Add totals row
-    data.push({
-      'DATE': '', 'CLEANER': '', 'TIMINGS': '', 'CLIENT': '', 'LOCATION': '',
-      'PHONE': '', 'MATERIALS': 'TOTAL', 'HOURS': totalHours.toFixed(1), 'RATE': '',
-      'TOTAL': totalRevenue.toFixed(2), 'PAY TYPE': '', 'STATUS': ''
+  // ===== EXCEL EXPORT FUNCTIONS (STYLED) =====
+
+  // Style helpers
+  const STYLE_HEADER = {
+    font: { name: 'Calibri', sz: 12, bold: true, color: { rgb: 'FFFFFFFF' } },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FF0F4C3A' } },
+    alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+    border: {
+      top: { style: 'thin', color: { rgb: 'FF1A1A1A' } },
+      bottom: { style: 'thin', color: { rgb: 'FF1A1A1A' } },
+      left: { style: 'thin', color: { rgb: 'FF1A1A1A' } },
+      right: { style: 'thin', color: { rgb: 'FF1A1A1A' } }
+    }
+  };
+  const STYLE_TITLE = {
+    font: { name: 'Calibri', sz: 16, bold: true, color: { rgb: 'FFFFFFFF' } },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FF0F4C3A' } },
+    alignment: { horizontal: 'center', vertical: 'center' }
+  };
+  const STYLE_SUBTITLE = {
+    font: { name: 'Calibri', sz: 11, italic: true, color: { rgb: 'FF555555' } },
+    alignment: { horizontal: 'center', vertical: 'center' }
+  };
+  const STYLE_CELL = {
+    font: { name: 'Calibri', sz: 11 },
+    alignment: { vertical: 'center', wrapText: true },
+    border: {
+      top: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+      bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+      left: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+      right: { style: 'thin', color: { rgb: 'FFD4CFC0' } }
+    }
+  };
+  const STYLE_CELL_ALT = {
+    ...{
+      font: { name: 'Calibri', sz: 11 },
+      alignment: { vertical: 'center', wrapText: true },
+      border: {
+        top: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+        bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+        left: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+        right: { style: 'thin', color: { rgb: 'FFD4CFC0' } }
+      }
+    },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FFFAF8F3' } }
+  };
+  const STYLE_TOTAL = {
+    font: { name: 'Calibri', sz: 12, bold: true, color: { rgb: 'FF0F4C3A' } },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FFE8F0EC' } },
+    alignment: { vertical: 'center' },
+    border: {
+      top: { style: 'medium', color: { rgb: 'FF0F4C3A' } },
+      bottom: { style: 'medium', color: { rgb: 'FF0F4C3A' } },
+      left: { style: 'thin', color: { rgb: 'FF0F4C3A' } },
+      right: { style: 'thin', color: { rgb: 'FF0F4C3A' } }
+    }
+  };
+  const STYLE_PAID = {
+    font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: 'FF0F4C3A' } },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FFD4E8DC' } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: {
+      top: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+      bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+      left: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+      right: { style: 'thin', color: { rgb: 'FFD4CFC0' } }
+    }
+  };
+  const STYLE_PENDING = {
+    font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: 'FFB8472A' } },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FFFEE2E2' } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: {
+      top: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+      bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+      left: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+      right: { style: 'thin', color: { rgb: 'FFD4CFC0' } }
+    }
+  };
+  const STYLE_MATERIALS = {
+    font: { name: 'Calibri', sz: 11, color: { rgb: 'FF0F4C3A' } },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FFD4E8DC' } },
+    alignment: { vertical: 'center', wrapText: true },
+    border: {
+      top: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+      bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+      left: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
+      right: { style: 'thin', color: { rgb: 'FFD4CFC0' } }
+    }
+  };
+
+  // Helper: build a styled sheet from headers + rows
+  const buildStyledSheet = (title, subtitle, headers, rows, colWidths, options = {}) => {
+    const ws = {};
+    const range = { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } };
+    
+    // Row 0: Title (merged)
+    ws[XLSX.utils.encode_cell({ r: 0, c: 0 })] = { v: title, t: 's', s: STYLE_TITLE };
+    for (let c = 1; c < headers.length; c++) {
+      ws[XLSX.utils.encode_cell({ r: 0, c })] = { v: '', t: 's', s: STYLE_TITLE };
+    }
+    
+    // Row 1: Subtitle (merged)
+    ws[XLSX.utils.encode_cell({ r: 1, c: 0 })] = { v: subtitle, t: 's', s: STYLE_SUBTITLE };
+    for (let c = 1; c < headers.length; c++) {
+      ws[XLSX.utils.encode_cell({ r: 1, c })] = { v: '', t: 's', s: STYLE_SUBTITLE };
+    }
+    
+    // Row 2: Empty spacer
+    // Row 3: Headers
+    headers.forEach((h, c) => {
+      ws[XLSX.utils.encode_cell({ r: 3, c })] = { v: h, t: 's', s: STYLE_HEADER };
     });
-    const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = [{wch:6},{wch:10},{wch:10},{wch:20},{wch:30},{wch:15},{wch:10},{wch:6},{wch:6},{wch:8},{wch:10},{wch:10}];
+    
+    // Row 4+: Data rows with alternating colors
+    rows.forEach((row, rIdx) => {
+      const r = rIdx + 4;
+      const alt = rIdx % 2 === 1;
+      row.forEach((cell, c) => {
+        const isLast = options.totalRow && rIdx === rows.length - 1;
+        let style = alt ? STYLE_CELL_ALT : STYLE_CELL;
+        if (isLast) style = STYLE_TOTAL;
+        // Status column styling
+        if (options.statusCol !== undefined && c === options.statusCol && !isLast) {
+          if (cell === 'PAID') style = STYLE_PAID;
+          else if (cell === 'PENDING') style = STYLE_PENDING;
+        }
+        // Materials column
+        if (options.materialsCol !== undefined && c === options.materialsCol && !isLast && cell === 'Yes') {
+          style = STYLE_MATERIALS;
+        }
+        const isNumber = typeof cell === 'number';
+        ws[XLSX.utils.encode_cell({ r, c })] = { v: cell, t: isNumber ? 'n' : 's', s: style };
+      });
+    });
+    
+    // Set range
+    const lastRow = rows.length + 3;
+    ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: lastRow, c: headers.length - 1 } });
+    
+    // Merge title and subtitle rows
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: headers.length - 1 } }
+    ];
+    
+    // Column widths
+    ws['!cols'] = colWidths.map(w => ({ wch: w }));
+    
+    // Row heights: title row taller
+    ws['!rows'] = [{ hpt: 28 }, { hpt: 18 }, { hpt: 8 }, { hpt: 24 }];
+    
+    return ws;
+  };
+
+  const formatLongDate = (d) => new Date(d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+
+  const exportDailyReportExcel = () => {
+    const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MATERIALS', 'HOURS', 'RATE', 'TOTAL', 'PAY TYPE', 'STATUS'];
+    const dayNum = new Date(date).getDate();
+    const rows = bookingsWithCalc.map(b => [
+      dayNum, b.cleaner, b.timing, b.clientName, b.location, b.phone || '',
+      b.withMaterials ? 'Yes' : 'No', Number(b.hours), Number(b.pricePerHour),
+      Number(b.total.toFixed(2)), b.paymentType, b.paymentStatus || 'PENDING'
+    ]);
+    rows.push(['', '', '', '', '', '', 'TOTAL', Number(totalHours.toFixed(1)), '', Number(totalRevenue.toFixed(2)), '', '']);
+    const widths = [6, 12, 12, 22, 32, 16, 11, 8, 8, 10, 12, 12];
+    const ws = buildStyledSheet('Sparkle Operations — Daily Report', formatLongDate(date), headers, rows, widths, { totalRow: true, statusCol: 11, materialsCol: 6 });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Daily Report');
     XLSX.writeFile(wb, `daily_report_${date}.xlsx`);
@@ -199,22 +342,17 @@ export default function CleaningApp() {
   };
 
   const exportClientsExcel = () => {
-    const data = clients.map(c => {
+    const headers = ['NAME', 'PHONE', 'ADDRESS', 'DEFAULT RATE/HR', 'MATERIALS', 'TOTAL VISITS', 'TOTAL REVENUE', 'NOTES'];
+    const rows = clients.map(c => {
       const visits = allBookingsWithDate.filter(b => b.clientId === c.id);
-      const revenue = visits.reduce((s, b) => s + (b.total || 0), 0);
-      return {
-        'NAME': c.name,
-        'PHONE': c.phone || '',
-        'ADDRESS': c.address || '',
-        'DEFAULT RATE/HR': c.defaultRate,
-        'WITH MATERIALS': c.defaultMaterials ? 'Yes' : 'No',
-        'TOTAL VISITS': visits.length,
-        'TOTAL REVENUE': revenue.toFixed(2),
-        'NOTES': c.notes || ''
-      };
+      return [
+        c.name, c.phone || '', c.address || '', Number(c.defaultRate),
+        c.defaultMaterials ? 'Yes' : 'No', visits.length,
+        Number(visits.reduce((s, b) => s + (b.total || 0), 0).toFixed(2)), c.notes || ''
+      ];
     });
-    const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = [{wch:20},{wch:18},{wch:35},{wch:14},{wch:14},{wch:12},{wch:14},{wch:25}];
+    const widths = [22, 18, 38, 14, 12, 12, 14, 28];
+    const ws = buildStyledSheet('Sparkle Operations — Client Database', `${clients.length} clients · Generated ${new Date().toLocaleDateString()}`, headers, rows, widths, { materialsCol: 4 });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Clients');
     XLSX.writeFile(wb, `clients_${new Date().toISOString().split('T')[0]}.xlsx`);
@@ -222,19 +360,14 @@ export default function CleaningApp() {
   };
 
   const exportContractsExcel = () => {
-    const data = contracts.map(c => ({
-      'CLIENT': c.clientName,
-      'CLEANER': c.cleaner,
-      'DAYS': c.daysOfWeek.map(d => DAYS[d]).join(', '),
-      'TIMING': c.timing,
-      'RATE/HR': c.pricePerHour,
-      'MATERIALS': c.withMaterials ? 'Yes' : 'No',
-      'PAYMENT': c.paymentType,
-      'STATUS': c.active ? 'Active' : 'Paused',
-      'START DATE': c.startDate || ''
-    }));
-    const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = [{wch:20},{wch:12},{wch:25},{wch:12},{wch:10},{wch:10},{wch:10},{wch:10},{wch:12}];
+    const headers = ['CLIENT', 'CLEANER', 'DAYS', 'TIMING', 'RATE/HR', 'MATERIALS', 'PAYMENT', 'STATUS', 'START DATE'];
+    const rows = contracts.map(c => [
+      c.clientName, c.cleaner, c.daysOfWeek.map(d => DAYS[d]).join(', '),
+      c.timing, Number(c.pricePerHour), c.withMaterials ? 'Yes' : 'No',
+      c.paymentType, c.active ? 'Active' : 'Paused', c.startDate || ''
+    ]);
+    const widths = [22, 12, 26, 14, 10, 12, 12, 10, 14];
+    const ws = buildStyledSheet('Sparkle Operations — Recurring Contracts', `${contracts.filter(c => c.active).length} active contracts · Generated ${new Date().toLocaleDateString()}`, headers, rows, widths, { materialsCol: 5 });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Contracts');
     XLSX.writeFile(wb, `contracts_${new Date().toISOString().split('T')[0]}.xlsx`);
@@ -242,50 +375,44 @@ export default function CleaningApp() {
   };
 
   const exportEarningsExcel = (period, filtered) => {
-    const stats = CLEANERS.map(name => {
+    const periodLabel = period === 'week' ? 'Last 7 days' : period === 'month' ? 'This month' : 'All time';
+    // Summary sheet
+    const sumHeaders = ['CLEANER', 'JOBS', 'HOURS', 'UNIQUE CLIENTS', 'CASH (AED)', 'ONLINE (AED)', 'TOTAL (AED)'];
+    const sumRows = CLEANERS.map(name => {
       const jobs = filtered.filter(b => b.cleaner === name);
-      return {
-        'CLEANER': name,
-        'JOBS': jobs.length,
-        'HOURS': jobs.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1),
-        'UNIQUE CLIENTS': new Set(jobs.map(b => b.clientName)).size,
-        'CASH': jobs.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
-        'ONLINE': jobs.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
-        'TOTAL REVENUE': jobs.reduce((s, b) => s + (b.total || 0), 0).toFixed(2)
-      };
+      return [
+        name, jobs.length,
+        Number(jobs.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1)),
+        new Set(jobs.map(b => b.clientName)).size,
+        Number(jobs.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+        Number(jobs.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+        Number(jobs.reduce((s, b) => s + (b.total || 0), 0).toFixed(2))
+      ];
     });
-    // Add grand total
-    stats.push({
-      'CLEANER': 'GRAND TOTAL',
-      'JOBS': filtered.length,
-      'HOURS': filtered.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1),
-      'UNIQUE CLIENTS': new Set(filtered.map(b => b.clientName)).size,
-      'CASH': filtered.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
-      'ONLINE': filtered.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
-      'TOTAL REVENUE': filtered.reduce((s, b) => s + (b.total || 0), 0).toFixed(2)
-    });
-    const ws = XLSX.utils.json_to_sheet(stats);
-    ws['!cols'] = [{wch:14},{wch:8},{wch:8},{wch:14},{wch:10},{wch:10},{wch:14}];
+    sumRows.push([
+      'GRAND TOTAL', filtered.length,
+      Number(filtered.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1)),
+      new Set(filtered.map(b => b.clientName)).size,
+      Number(filtered.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+      Number(filtered.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+      Number(filtered.reduce((s, b) => s + (b.total || 0), 0).toFixed(2))
+    ]);
+    const sumWidths = [16, 8, 10, 16, 14, 14, 14];
+    const wsSum = buildStyledSheet('Sparkle Operations — Cleaner Earnings', `${periodLabel} · ${filtered.length} jobs`, sumHeaders, sumRows, sumWidths, { totalRow: true });
 
-    // Detail sheet with all jobs
-    const detailData = filtered.map(b => ({
-      'DATE': b.date,
-      'CLEANER': b.cleaner,
-      'CLIENT': b.clientName,
-      'LOCATION': b.location,
-      'TIMING': b.timing,
-      'HOURS': b.hours,
-      'RATE': b.pricePerHour,
-      'TOTAL': (b.total || 0).toFixed(2),
-      'PAY TYPE': b.paymentType,
-      'STATUS': b.paymentStatus || 'PENDING'
-    }));
-    const wsDetail = XLSX.utils.json_to_sheet(detailData);
-    wsDetail['!cols'] = [{wch:12},{wch:12},{wch:20},{wch:30},{wch:12},{wch:8},{wch:8},{wch:10},{wch:10},{wch:10}];
+    // Detail sheet
+    const detHeaders = ['DATE', 'CLEANER', 'CLIENT', 'LOCATION', 'TIMING', 'HOURS', 'RATE', 'TOTAL', 'PAY TYPE', 'STATUS'];
+    const detRows = filtered.map(b => [
+      b.date, b.cleaner, b.clientName, b.location, b.timing,
+      Number(b.hours), Number(b.pricePerHour), Number((b.total || 0).toFixed(2)),
+      b.paymentType, b.paymentStatus || 'PENDING'
+    ]);
+    const detWidths = [12, 14, 22, 32, 12, 8, 8, 10, 12, 12];
+    const wsDet = buildStyledSheet('Sparkle Operations — Earnings Detail', `${periodLabel} · all individual jobs`, detHeaders, detRows, detWidths, { statusCol: 9 });
 
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Summary');
-    XLSX.utils.book_append_sheet(wb, wsDetail, 'Detail');
+    XLSX.utils.book_append_sheet(wb, wsSum, 'Summary');
+    XLSX.utils.book_append_sheet(wb, wsDet, 'Detail');
     XLSX.writeFile(wb, `earnings_${period}_${new Date().toISOString().split('T')[0]}.xlsx`);
     showStatus('✓ Excel downloaded');
   };
@@ -293,123 +420,120 @@ export default function CleaningApp() {
   const exportPendingExcel = () => {
     const pending = allBookingsWithDate.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
     const today = new Date().setHours(0, 0, 0, 0);
-    const data = pending.map(b => {
+    const headers = ['DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'HOURS', 'AMOUNT (AED)', 'PAY TYPE', 'DAYS OVERDUE'];
+    const rows = pending.map(b => {
       const overdue = Math.floor((today - new Date(b.date).setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24));
-      return {
-        'DATE': b.date,
-        'CLIENT': b.clientName,
-        'PHONE': b.phone || '',
-        'LOCATION': b.location,
-        'CLEANER': b.cleaner,
-        'TIMING': b.timing,
-        'HOURS': b.hours,
-        'AMOUNT (AED)': b.total.toFixed(2),
-        'PAY TYPE': b.paymentType,
-        'DAYS OVERDUE': overdue > 0 ? overdue : 0
-      };
+      return [
+        b.date, b.clientName, b.phone || '', b.location, b.cleaner, b.timing,
+        Number(b.hours), Number(b.total.toFixed(2)), b.paymentType, overdue > 0 ? overdue : 0
+      ];
     });
-    const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = [{wch:12},{wch:20},{wch:18},{wch:30},{wch:12},{wch:12},{wch:8},{wch:14},{wch:10},{wch:14}];
+    const totalAmount = pending.reduce((s, b) => s + b.total, 0);
+    rows.push(['', '', '', '', '', '', 'TOTAL OWED', Number(totalAmount.toFixed(2)), '', '']);
+    const widths = [12, 22, 18, 32, 14, 12, 8, 14, 12, 14];
+    const ws = buildStyledSheet('Sparkle Operations — Pending Payments', `${pending.length} unpaid jobs · ${totalAmount.toFixed(2)} AED outstanding`, headers, rows, widths, { totalRow: true });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Pending Payments');
     XLSX.writeFile(wb, `pending_payments_${new Date().toISOString().split('T')[0]}.xlsx`);
     showStatus('✓ Excel downloaded');
   };
 
-  // MASTER EXPORT - all data in one workbook
   const exportEverythingExcel = () => {
     const wb = XLSX.utils.book_new();
 
-    // Sheet 1: Today's bookings
+    // Sheet 1: Today
     if (bookingsWithCalc.length > 0) {
+      const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MATERIALS', 'HOURS', 'RATE', 'TOTAL', 'PAY TYPE', 'STATUS'];
       const dayNum = new Date(date).getDate();
-      const todayData = bookingsWithCalc.map(b => ({
-        'DATE': dayNum, 'CLEANER': b.cleaner, 'TIMINGS': b.timing, 'CLIENT': b.clientName,
-        'LOCATION': b.location, 'PHONE': b.phone || '', 'MATERIALS': b.withMaterials ? 'Yes' : 'No',
-        'HOURS': b.hours, 'RATE': b.pricePerHour, 'TOTAL': b.total.toFixed(2),
-        'PAY TYPE': b.paymentType, 'STATUS': b.paymentStatus || 'PENDING'
-      }));
-      const ws1 = XLSX.utils.json_to_sheet(todayData);
-      ws1['!cols'] = [{wch:6},{wch:10},{wch:10},{wch:20},{wch:30},{wch:15},{wch:10},{wch:6},{wch:6},{wch:8},{wch:10},{wch:10}];
-      XLSX.utils.book_append_sheet(wb, ws1, 'Today\'s Report');
+      const rows = bookingsWithCalc.map(b => [
+        dayNum, b.cleaner, b.timing, b.clientName, b.location, b.phone || '',
+        b.withMaterials ? 'Yes' : 'No', Number(b.hours), Number(b.pricePerHour),
+        Number(b.total.toFixed(2)), b.paymentType, b.paymentStatus || 'PENDING'
+      ]);
+      rows.push(['', '', '', '', '', '', 'TOTAL', Number(totalHours.toFixed(1)), '', Number(totalRevenue.toFixed(2)), '', '']);
+      const ws = buildStyledSheet('Today — Daily Report', formatLongDate(date), headers, rows, [6, 12, 12, 22, 32, 16, 11, 8, 8, 10, 12, 12], { totalRow: true, statusCol: 11, materialsCol: 6 });
+      XLSX.utils.book_append_sheet(wb, ws, 'Today');
     }
 
-    // Sheet 2: All bookings history
+    // Sheet 2: All History
     if (allBookingsWithDate.length > 0) {
-      const allData = allBookingsWithDate.map(b => ({
-        'DATE': b.date, 'CLEANER': b.cleaner, 'TIMINGS': b.timing, 'CLIENT': b.clientName,
-        'LOCATION': b.location, 'PHONE': b.phone || '', 'MATERIALS': b.withMaterials ? 'Yes' : 'No',
-        'HOURS': b.hours, 'RATE': b.pricePerHour, 'TOTAL': (b.total || 0).toFixed(2),
-        'PAY TYPE': b.paymentType, 'STATUS': b.paymentStatus || 'PENDING'
-      }));
-      const ws2 = XLSX.utils.json_to_sheet(allData);
-      ws2['!cols'] = [{wch:12},{wch:10},{wch:10},{wch:20},{wch:30},{wch:15},{wch:10},{wch:6},{wch:6},{wch:8},{wch:10},{wch:10}];
-      XLSX.utils.book_append_sheet(wb, ws2, 'All History');
+      const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MATERIALS', 'HOURS', 'RATE', 'TOTAL', 'PAY TYPE', 'STATUS'];
+      const rows = allBookingsWithDate.map(b => [
+        b.date, b.cleaner, b.timing, b.clientName, b.location, b.phone || '',
+        b.withMaterials ? 'Yes' : 'No', Number(b.hours), Number(b.pricePerHour),
+        Number((b.total || 0).toFixed(2)), b.paymentType, b.paymentStatus || 'PENDING'
+      ]);
+      const ws = buildStyledSheet('All History', `${allBookingsWithDate.length} total jobs`, headers, rows, [12, 12, 12, 22, 32, 16, 11, 8, 8, 10, 12, 12], { statusCol: 11, materialsCol: 6 });
+      XLSX.utils.book_append_sheet(wb, ws, 'History');
     }
 
     // Sheet 3: Clients
     if (clients.length > 0) {
-      const clientData = clients.map(c => {
+      const headers = ['NAME', 'PHONE', 'ADDRESS', 'DEFAULT RATE/HR', 'MATERIALS', 'TOTAL VISITS', 'TOTAL REVENUE', 'NOTES'];
+      const rows = clients.map(c => {
         const visits = allBookingsWithDate.filter(b => b.clientId === c.id);
-        return {
-          'NAME': c.name, 'PHONE': c.phone || '', 'ADDRESS': c.address || '',
-          'DEFAULT RATE/HR': c.defaultRate, 'MATERIALS': c.defaultMaterials ? 'Yes' : 'No',
-          'TOTAL VISITS': visits.length,
-          'TOTAL REVENUE': visits.reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
-          'NOTES': c.notes || ''
-        };
+        return [
+          c.name, c.phone || '', c.address || '', Number(c.defaultRate),
+          c.defaultMaterials ? 'Yes' : 'No', visits.length,
+          Number(visits.reduce((s, b) => s + (b.total || 0), 0).toFixed(2)), c.notes || ''
+        ];
       });
-      const ws3 = XLSX.utils.json_to_sheet(clientData);
-      ws3['!cols'] = [{wch:20},{wch:18},{wch:35},{wch:14},{wch:12},{wch:12},{wch:14},{wch:25}];
-      XLSX.utils.book_append_sheet(wb, ws3, 'Clients');
+      const ws = buildStyledSheet('Client Database', `${clients.length} clients`, headers, rows, [22, 18, 38, 14, 12, 12, 14, 28], { materialsCol: 4 });
+      XLSX.utils.book_append_sheet(wb, ws, 'Clients');
     }
 
     // Sheet 4: Contracts
     if (contracts.length > 0) {
-      const contractData = contracts.map(c => ({
-        'CLIENT': c.clientName, 'CLEANER': c.cleaner,
-        'DAYS': c.daysOfWeek.map(d => DAYS[d]).join(', '),
-        'TIMING': c.timing, 'RATE/HR': c.pricePerHour,
-        'MATERIALS': c.withMaterials ? 'Yes' : 'No', 'PAYMENT': c.paymentType,
-        'STATUS': c.active ? 'Active' : 'Paused'
-      }));
-      const ws4 = XLSX.utils.json_to_sheet(contractData);
-      ws4['!cols'] = [{wch:20},{wch:12},{wch:25},{wch:12},{wch:10},{wch:10},{wch:10},{wch:10}];
-      XLSX.utils.book_append_sheet(wb, ws4, 'Contracts');
+      const headers = ['CLIENT', 'CLEANER', 'DAYS', 'TIMING', 'RATE/HR', 'MATERIALS', 'PAYMENT', 'STATUS'];
+      const rows = contracts.map(c => [
+        c.clientName, c.cleaner, c.daysOfWeek.map(d => DAYS[d]).join(', '),
+        c.timing, Number(c.pricePerHour), c.withMaterials ? 'Yes' : 'No',
+        c.paymentType, c.active ? 'Active' : 'Paused'
+      ]);
+      const ws = buildStyledSheet('Recurring Contracts', `${contracts.filter(c => c.active).length} active`, headers, rows, [22, 12, 26, 14, 10, 12, 12, 10], { materialsCol: 5 });
+      XLSX.utils.book_append_sheet(wb, ws, 'Contracts');
     }
 
-    // Sheet 5: Earnings by cleaner (all-time)
-    const earnings = CLEANERS.map(name => {
+    // Sheet 5: Earnings (all-time)
+    const earnHeaders = ['CLEANER', 'JOBS', 'HOURS', 'UNIQUE CLIENTS', 'CASH (AED)', 'ONLINE (AED)', 'TOTAL (AED)'];
+    const earnRows = CLEANERS.map(name => {
       const jobs = allBookingsWithDate.filter(b => b.cleaner === name);
-      return {
-        'CLEANER': name, 'JOBS': jobs.length,
-        'HOURS': jobs.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1),
-        'UNIQUE CLIENTS': new Set(jobs.map(b => b.clientName)).size,
-        'CASH': jobs.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
-        'ONLINE': jobs.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
-        'TOTAL': jobs.reduce((s, b) => s + (b.total || 0), 0).toFixed(2)
-      };
+      return [
+        name, jobs.length,
+        Number(jobs.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1)),
+        new Set(jobs.map(b => b.clientName)).size,
+        Number(jobs.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+        Number(jobs.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+        Number(jobs.reduce((s, b) => s + (b.total || 0), 0).toFixed(2))
+      ];
     });
-    const ws5 = XLSX.utils.json_to_sheet(earnings);
-    ws5['!cols'] = [{wch:14},{wch:8},{wch:8},{wch:14},{wch:10},{wch:10},{wch:14}];
-    XLSX.utils.book_append_sheet(wb, ws5, 'Earnings');
+    earnRows.push([
+      'GRAND TOTAL', allBookingsWithDate.length,
+      Number(allBookingsWithDate.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1)),
+      new Set(allBookingsWithDate.map(b => b.clientName)).size,
+      Number(allBookingsWithDate.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+      Number(allBookingsWithDate.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+      Number(allBookingsWithDate.reduce((s, b) => s + (b.total || 0), 0).toFixed(2))
+    ]);
+    const wsEarn = buildStyledSheet('Cleaner Earnings — All Time', `${allBookingsWithDate.length} total jobs`, earnHeaders, earnRows, [16, 8, 10, 16, 14, 14, 14], { totalRow: true });
+    XLSX.utils.book_append_sheet(wb, wsEarn, 'Earnings');
 
-    // Sheet 6: Pending payments
+    // Sheet 6: Pending
     const pending = allBookingsWithDate.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
     if (pending.length > 0) {
       const todaySafe = new Date().setHours(0, 0, 0, 0);
-      const pendingData = pending.map(b => {
+      const headers = ['DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'AMOUNT (AED)', 'PAY TYPE', 'DAYS OVERDUE'];
+      const rows = pending.map(b => {
         const overdue = Math.floor((todaySafe - new Date(b.date).setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24));
-        return {
-          'DATE': b.date, 'CLIENT': b.clientName, 'PHONE': b.phone || '',
-          'LOCATION': b.location, 'CLEANER': b.cleaner, 'TIMING': b.timing,
-          'AMOUNT (AED)': b.total.toFixed(2), 'PAY TYPE': b.paymentType,
-          'DAYS OVERDUE': overdue > 0 ? overdue : 0
-        };
+        return [
+          b.date, b.clientName, b.phone || '', b.location, b.cleaner, b.timing,
+          Number(b.total.toFixed(2)), b.paymentType, overdue > 0 ? overdue : 0
+        ];
       });
-      const ws6 = XLSX.utils.json_to_sheet(pendingData);
-      ws6['!cols'] = [{wch:12},{wch:20},{wch:18},{wch:30},{wch:12},{wch:12},{wch:14},{wch:10},{wch:14}];
-      XLSX.utils.book_append_sheet(wb, ws6, 'Pending');
+      const totalOwed = pending.reduce((s, b) => s + b.total, 0);
+      rows.push(['', '', '', '', '', 'TOTAL OWED', Number(totalOwed.toFixed(2)), '', '']);
+      const ws = buildStyledSheet('Pending Payments', `${pending.length} unpaid · ${totalOwed.toFixed(2)} AED owed`, headers, rows, [12, 22, 18, 32, 14, 12, 14, 12, 14], { totalRow: true });
+      XLSX.utils.book_append_sheet(wb, ws, 'Pending');
     }
 
     XLSX.writeFile(wb, `sparkle_operations_full_${new Date().toISOString().split('T')[0]}.xlsx`);
