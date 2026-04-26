@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, FileText, Grid3x3, Download, Printer, Save, RotateCcw, Users, DollarSign, Clock, BookUser, TrendingUp, AlertCircle, Repeat, Search, X, Check, Phone, MapPin, Edit2, ChevronRight } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { Plus, Trash2, FileText, Grid3x3, Download, Printer, Save, RotateCcw, Users, DollarSign, Clock, BookUser, TrendingUp, AlertCircle, Repeat, Search, X, Check, Phone, MapPin, Edit2, ChevronRight, FileSpreadsheet } from 'lucide-react';
 
 const CLEANERS = ['Leah', 'Eva', 'Zainab', 'Roselyn', 'Coline', 'Angel', 'Razelle'];
 const PAYMENT_TYPES = ['ONLINE', 'CASH'];
@@ -166,6 +167,255 @@ export default function CleaningApp() {
     a.href = url; a.download = `report_${date}.csv`; a.click();
   };
 
+  // ===== EXCEL EXPORT FUNCTIONS =====
+  const exportDailyReportExcel = () => {
+    const dayNum = new Date(date).getDate();
+    const data = bookingsWithCalc.map(b => ({
+      'DATE': dayNum,
+      'CLEANER': b.cleaner,
+      'TIMINGS': b.timing,
+      'CLIENT': b.clientName,
+      'LOCATION': b.location,
+      'PHONE': b.phone || '',
+      'MATERIALS': b.withMaterials ? 'Yes' : 'No',
+      'HOURS': b.hours,
+      'RATE': b.pricePerHour,
+      'TOTAL': b.total.toFixed(2),
+      'PAY TYPE': b.paymentType,
+      'STATUS': b.paymentStatus || 'PENDING'
+    }));
+    // Add totals row
+    data.push({
+      'DATE': '', 'CLEANER': '', 'TIMINGS': '', 'CLIENT': '', 'LOCATION': '',
+      'PHONE': '', 'MATERIALS': 'TOTAL', 'HOURS': totalHours.toFixed(1), 'RATE': '',
+      'TOTAL': totalRevenue.toFixed(2), 'PAY TYPE': '', 'STATUS': ''
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws['!cols'] = [{wch:6},{wch:10},{wch:10},{wch:20},{wch:30},{wch:15},{wch:10},{wch:6},{wch:6},{wch:8},{wch:10},{wch:10}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Daily Report');
+    XLSX.writeFile(wb, `daily_report_${date}.xlsx`);
+    showStatus('✓ Excel downloaded');
+  };
+
+  const exportClientsExcel = () => {
+    const data = clients.map(c => {
+      const visits = allBookingsWithDate.filter(b => b.clientId === c.id);
+      const revenue = visits.reduce((s, b) => s + (b.total || 0), 0);
+      return {
+        'NAME': c.name,
+        'PHONE': c.phone || '',
+        'ADDRESS': c.address || '',
+        'DEFAULT RATE/HR': c.defaultRate,
+        'WITH MATERIALS': c.defaultMaterials ? 'Yes' : 'No',
+        'TOTAL VISITS': visits.length,
+        'TOTAL REVENUE': revenue.toFixed(2),
+        'NOTES': c.notes || ''
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws['!cols'] = [{wch:20},{wch:18},{wch:35},{wch:14},{wch:14},{wch:12},{wch:14},{wch:25}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Clients');
+    XLSX.writeFile(wb, `clients_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showStatus('✓ Excel downloaded');
+  };
+
+  const exportContractsExcel = () => {
+    const data = contracts.map(c => ({
+      'CLIENT': c.clientName,
+      'CLEANER': c.cleaner,
+      'DAYS': c.daysOfWeek.map(d => DAYS[d]).join(', '),
+      'TIMING': c.timing,
+      'RATE/HR': c.pricePerHour,
+      'MATERIALS': c.withMaterials ? 'Yes' : 'No',
+      'PAYMENT': c.paymentType,
+      'STATUS': c.active ? 'Active' : 'Paused',
+      'START DATE': c.startDate || ''
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws['!cols'] = [{wch:20},{wch:12},{wch:25},{wch:12},{wch:10},{wch:10},{wch:10},{wch:10},{wch:12}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Contracts');
+    XLSX.writeFile(wb, `contracts_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showStatus('✓ Excel downloaded');
+  };
+
+  const exportEarningsExcel = (period, filtered) => {
+    const stats = CLEANERS.map(name => {
+      const jobs = filtered.filter(b => b.cleaner === name);
+      return {
+        'CLEANER': name,
+        'JOBS': jobs.length,
+        'HOURS': jobs.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1),
+        'UNIQUE CLIENTS': new Set(jobs.map(b => b.clientName)).size,
+        'CASH': jobs.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
+        'ONLINE': jobs.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
+        'TOTAL REVENUE': jobs.reduce((s, b) => s + (b.total || 0), 0).toFixed(2)
+      };
+    });
+    // Add grand total
+    stats.push({
+      'CLEANER': 'GRAND TOTAL',
+      'JOBS': filtered.length,
+      'HOURS': filtered.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1),
+      'UNIQUE CLIENTS': new Set(filtered.map(b => b.clientName)).size,
+      'CASH': filtered.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
+      'ONLINE': filtered.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
+      'TOTAL REVENUE': filtered.reduce((s, b) => s + (b.total || 0), 0).toFixed(2)
+    });
+    const ws = XLSX.utils.json_to_sheet(stats);
+    ws['!cols'] = [{wch:14},{wch:8},{wch:8},{wch:14},{wch:10},{wch:10},{wch:14}];
+
+    // Detail sheet with all jobs
+    const detailData = filtered.map(b => ({
+      'DATE': b.date,
+      'CLEANER': b.cleaner,
+      'CLIENT': b.clientName,
+      'LOCATION': b.location,
+      'TIMING': b.timing,
+      'HOURS': b.hours,
+      'RATE': b.pricePerHour,
+      'TOTAL': (b.total || 0).toFixed(2),
+      'PAY TYPE': b.paymentType,
+      'STATUS': b.paymentStatus || 'PENDING'
+    }));
+    const wsDetail = XLSX.utils.json_to_sheet(detailData);
+    wsDetail['!cols'] = [{wch:12},{wch:12},{wch:20},{wch:30},{wch:12},{wch:8},{wch:8},{wch:10},{wch:10},{wch:10}];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Summary');
+    XLSX.utils.book_append_sheet(wb, wsDetail, 'Detail');
+    XLSX.writeFile(wb, `earnings_${period}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showStatus('✓ Excel downloaded');
+  };
+
+  const exportPendingExcel = () => {
+    const pending = allBookingsWithDate.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
+    const today = new Date().setHours(0, 0, 0, 0);
+    const data = pending.map(b => {
+      const overdue = Math.floor((today - new Date(b.date).setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24));
+      return {
+        'DATE': b.date,
+        'CLIENT': b.clientName,
+        'PHONE': b.phone || '',
+        'LOCATION': b.location,
+        'CLEANER': b.cleaner,
+        'TIMING': b.timing,
+        'HOURS': b.hours,
+        'AMOUNT (AED)': b.total.toFixed(2),
+        'PAY TYPE': b.paymentType,
+        'DAYS OVERDUE': overdue > 0 ? overdue : 0
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws['!cols'] = [{wch:12},{wch:20},{wch:18},{wch:30},{wch:12},{wch:12},{wch:8},{wch:14},{wch:10},{wch:14}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Pending Payments');
+    XLSX.writeFile(wb, `pending_payments_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showStatus('✓ Excel downloaded');
+  };
+
+  // MASTER EXPORT - all data in one workbook
+  const exportEverythingExcel = () => {
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Today's bookings
+    if (bookingsWithCalc.length > 0) {
+      const dayNum = new Date(date).getDate();
+      const todayData = bookingsWithCalc.map(b => ({
+        'DATE': dayNum, 'CLEANER': b.cleaner, 'TIMINGS': b.timing, 'CLIENT': b.clientName,
+        'LOCATION': b.location, 'PHONE': b.phone || '', 'MATERIALS': b.withMaterials ? 'Yes' : 'No',
+        'HOURS': b.hours, 'RATE': b.pricePerHour, 'TOTAL': b.total.toFixed(2),
+        'PAY TYPE': b.paymentType, 'STATUS': b.paymentStatus || 'PENDING'
+      }));
+      const ws1 = XLSX.utils.json_to_sheet(todayData);
+      ws1['!cols'] = [{wch:6},{wch:10},{wch:10},{wch:20},{wch:30},{wch:15},{wch:10},{wch:6},{wch:6},{wch:8},{wch:10},{wch:10}];
+      XLSX.utils.book_append_sheet(wb, ws1, 'Today\'s Report');
+    }
+
+    // Sheet 2: All bookings history
+    if (allBookingsWithDate.length > 0) {
+      const allData = allBookingsWithDate.map(b => ({
+        'DATE': b.date, 'CLEANER': b.cleaner, 'TIMINGS': b.timing, 'CLIENT': b.clientName,
+        'LOCATION': b.location, 'PHONE': b.phone || '', 'MATERIALS': b.withMaterials ? 'Yes' : 'No',
+        'HOURS': b.hours, 'RATE': b.pricePerHour, 'TOTAL': (b.total || 0).toFixed(2),
+        'PAY TYPE': b.paymentType, 'STATUS': b.paymentStatus || 'PENDING'
+      }));
+      const ws2 = XLSX.utils.json_to_sheet(allData);
+      ws2['!cols'] = [{wch:12},{wch:10},{wch:10},{wch:20},{wch:30},{wch:15},{wch:10},{wch:6},{wch:6},{wch:8},{wch:10},{wch:10}];
+      XLSX.utils.book_append_sheet(wb, ws2, 'All History');
+    }
+
+    // Sheet 3: Clients
+    if (clients.length > 0) {
+      const clientData = clients.map(c => {
+        const visits = allBookingsWithDate.filter(b => b.clientId === c.id);
+        return {
+          'NAME': c.name, 'PHONE': c.phone || '', 'ADDRESS': c.address || '',
+          'DEFAULT RATE/HR': c.defaultRate, 'MATERIALS': c.defaultMaterials ? 'Yes' : 'No',
+          'TOTAL VISITS': visits.length,
+          'TOTAL REVENUE': visits.reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
+          'NOTES': c.notes || ''
+        };
+      });
+      const ws3 = XLSX.utils.json_to_sheet(clientData);
+      ws3['!cols'] = [{wch:20},{wch:18},{wch:35},{wch:14},{wch:12},{wch:12},{wch:14},{wch:25}];
+      XLSX.utils.book_append_sheet(wb, ws3, 'Clients');
+    }
+
+    // Sheet 4: Contracts
+    if (contracts.length > 0) {
+      const contractData = contracts.map(c => ({
+        'CLIENT': c.clientName, 'CLEANER': c.cleaner,
+        'DAYS': c.daysOfWeek.map(d => DAYS[d]).join(', '),
+        'TIMING': c.timing, 'RATE/HR': c.pricePerHour,
+        'MATERIALS': c.withMaterials ? 'Yes' : 'No', 'PAYMENT': c.paymentType,
+        'STATUS': c.active ? 'Active' : 'Paused'
+      }));
+      const ws4 = XLSX.utils.json_to_sheet(contractData);
+      ws4['!cols'] = [{wch:20},{wch:12},{wch:25},{wch:12},{wch:10},{wch:10},{wch:10},{wch:10}];
+      XLSX.utils.book_append_sheet(wb, ws4, 'Contracts');
+    }
+
+    // Sheet 5: Earnings by cleaner (all-time)
+    const earnings = CLEANERS.map(name => {
+      const jobs = allBookingsWithDate.filter(b => b.cleaner === name);
+      return {
+        'CLEANER': name, 'JOBS': jobs.length,
+        'HOURS': jobs.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1),
+        'UNIQUE CLIENTS': new Set(jobs.map(b => b.clientName)).size,
+        'CASH': jobs.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
+        'ONLINE': jobs.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2),
+        'TOTAL': jobs.reduce((s, b) => s + (b.total || 0), 0).toFixed(2)
+      };
+    });
+    const ws5 = XLSX.utils.json_to_sheet(earnings);
+    ws5['!cols'] = [{wch:14},{wch:8},{wch:8},{wch:14},{wch:10},{wch:10},{wch:14}];
+    XLSX.utils.book_append_sheet(wb, ws5, 'Earnings');
+
+    // Sheet 6: Pending payments
+    const pending = allBookingsWithDate.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
+    if (pending.length > 0) {
+      const todaySafe = new Date().setHours(0, 0, 0, 0);
+      const pendingData = pending.map(b => {
+        const overdue = Math.floor((todaySafe - new Date(b.date).setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24));
+        return {
+          'DATE': b.date, 'CLIENT': b.clientName, 'PHONE': b.phone || '',
+          'LOCATION': b.location, 'CLEANER': b.cleaner, 'TIMING': b.timing,
+          'AMOUNT (AED)': b.total.toFixed(2), 'PAY TYPE': b.paymentType,
+          'DAYS OVERDUE': overdue > 0 ? overdue : 0
+        };
+      });
+      const ws6 = XLSX.utils.json_to_sheet(pendingData);
+      ws6['!cols'] = [{wch:12},{wch:20},{wch:18},{wch:30},{wch:12},{wch:12},{wch:14},{wch:10},{wch:14}];
+      XLSX.utils.book_append_sheet(wb, ws6, 'Pending');
+    }
+
+    XLSX.writeFile(wb, `sparkle_operations_full_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showStatus('✓ Full export downloaded');
+  };
+
   const printPage = () => window.print();
 
   const colors = {
@@ -229,13 +479,13 @@ export default function CleaningApp() {
       </div>
 
       <div style={{ padding: '32px', maxWidth: '1400px', margin: '0 auto' }}>
-        {view === 'input' && <InputView bookings={bookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} clients={clients} setClientPickerFor={setClientPickerFor} contracts={contracts} generateFromContracts={generateFromContracts} />}
+        {view === 'input' && <InputView bookings={bookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} clients={clients} setClientPickerFor={setClientPickerFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={CLEANERS} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
-        {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} />}
-        {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} />}
-        {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} />}
-        {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} />}
-        {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} />}
+        {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
+        {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} />}
+        {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} exportContractsExcel={exportContractsExcel} />}
+        {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
+        {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} />}
       </div>
 
       {clientPickerFor && <ClientPickerModal clients={clients} onPick={(c) => applyClientToBooking(clientPickerFor, c)} onClose={() => setClientPickerFor(null)} colors={colors} />}
@@ -243,12 +493,17 @@ export default function CleaningApp() {
   );
 }
 
-function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, clients, setClientPickerFor, contracts, generateFromContracts }) {
+function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, clients, setClientPickerFor, contracts, generateFromContracts, exportEverythingExcel }) {
   const dayOfWeek = new Date(date).getDay();
   const todayContracts = contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek));
 
   return (
     <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px' }}>
+        <button className="btn btn-primary" onClick={exportEverythingExcel} title="Download a complete Excel file with all your data: today's report, all history, clients, contracts, earnings, and pending payments">
+          <FileSpreadsheet size={14} /> Export Everything to Excel
+        </button>
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginBottom: '20px' }}>
         <StatCard icon={<DollarSign size={18} />} label="Revenue" value={`${totalRevenue.toFixed(0)} AED`} color={colors.accent} colors={colors} />
         <StatCard icon={<Clock size={18} />} label="Hours" value={`${totalHours.toFixed(1)}`} color={colors.gold} colors={colors} />
@@ -333,7 +588,7 @@ function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, remo
   );
 }
 
-function ClientsView({ clients, saveClients, colors, allBookings }) {
+function ClientsView({ clients, saveClients, colors, allBookings, exportClientsExcel }) {
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState('');
 
@@ -364,11 +619,12 @@ function ClientsView({ clients, saveClients, colors, allBookings }) {
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Client Database</h2>
           <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>{clients.length} saved clients · auto-fills bookings & contracts</p>
         </div>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ position: 'relative' }}>
             <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: colors.ink + '66' }} />
             <input className="input" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} style={{ paddingLeft: '32px', width: '200px' }} />
           </div>
+          {clients.length > 0 && <button className="btn" onClick={exportClientsExcel}><FileSpreadsheet size={14} /> Excel</button>}
           <button className="btn btn-primary" onClick={startNew}><Plus size={14} /> New Client</button>
         </div>
       </div>
@@ -467,7 +723,7 @@ function ClientPickerModal({ clients, onPick, onClose, colors }) {
   );
 }
 
-function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS }) {
+function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, exportContractsExcel }) {
   const [editing, setEditing] = useState(null);
 
   const startNew = () => {
@@ -502,7 +758,10 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS }) 
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Monthly Contracts</h2>
           <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Recurring weekly jobs · auto-fill the schedule on the right day</p>
         </div>
-        <button className="btn btn-primary" onClick={startNew}><Plus size={14} /> New Contract</button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {contracts.length > 0 && <button className="btn" onClick={exportContractsExcel}><FileSpreadsheet size={14} /> Excel</button>}
+          <button className="btn btn-primary" onClick={startNew}><Plus size={14} /> New Contract</button>
+        </div>
       </div>
 
       {contracts.length === 0 && !editing && (
@@ -584,7 +843,7 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS }) 
   );
 }
 
-function EarningsView({ allBookings, CLEANERS, colors }) {
+function EarningsView({ allBookings, CLEANERS, colors, exportEarningsExcel }) {
   const [period, setPeriod] = useState('month');
   const now = new Date();
   const filterStart = new Date();
@@ -617,10 +876,13 @@ function EarningsView({ allBookings, CLEANERS, colors }) {
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Cleaner Earnings Report</h2>
           <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>{periodLabel} · {filtered.length} total jobs</p>
         </div>
-        <div style={{ display: 'flex', gap: '4px', background: 'white', borderRadius: '8px', padding: '4px', border: `1px solid ${colors.border}` }}>
-          {[['week', 'Week'], ['month', 'Month'], ['all', 'All time']].map(([k, lbl]) => (
-            <button key={k} className={`btn btn-sm ${period === k ? 'btn-primary' : ''}`} onClick={() => setPeriod(k)} style={{ border: 'none' }}>{lbl}</button>
-          ))}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '4px', background: 'white', borderRadius: '8px', padding: '4px', border: `1px solid ${colors.border}` }}>
+            {[['week', 'Week'], ['month', 'Month'], ['all', 'All time']].map(([k, lbl]) => (
+              <button key={k} className={`btn btn-sm ${period === k ? 'btn-primary' : ''}`} onClick={() => setPeriod(k)} style={{ border: 'none' }}>{lbl}</button>
+            ))}
+          </div>
+          {filtered.length > 0 && <button className="btn btn-primary" onClick={() => exportEarningsExcel(period, filtered)}><FileSpreadsheet size={14} /> Excel</button>}
         </div>
       </div>
 
@@ -659,7 +921,7 @@ function EarningsView({ allBookings, CLEANERS, colors }) {
   );
 }
 
-function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookings, date, colors, formatDateShort }) {
+function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookings, date, colors, formatDateShort, exportPendingExcel }) {
   const pending = allBookings.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
   const totalPending = pending.reduce((s, b) => s + b.total, 0);
   const byClient = {};
@@ -692,9 +954,12 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Pending Payments</h2>
           <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>{pending.length} unpaid jobs across {groups.length} clients</p>
         </div>
-        <div style={{ padding: '12px 20px', background: pending.length ? '#FEF3C7' : colors.accentLight, border: `1.5px solid ${pending.length ? colors.warning : colors.accent}`, borderRadius: '10px', textAlign: 'right' }}>
-          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>Outstanding</div>
-          <div className="display-font" style={{ fontSize: '24px', fontWeight: 800, color: pending.length ? colors.warning : colors.accent }}>{totalPending.toFixed(2)} AED</div>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {pending.length > 0 && <button className="btn btn-primary" onClick={exportPendingExcel}><FileSpreadsheet size={14} /> Excel</button>}
+          <div style={{ padding: '12px 20px', background: pending.length ? '#FEF3C7' : colors.accentLight, border: `1.5px solid ${pending.length ? colors.warning : colors.accent}`, borderRadius: '10px', textAlign: 'right' }}>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>Outstanding</div>
+            <div className="display-font" style={{ fontSize: '24px', fontWeight: 800, color: pending.length ? colors.warning : colors.accent }}>{totalPending.toFixed(2)} AED</div>
+          </div>
         </div>
       </div>
 
@@ -795,7 +1060,7 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
   );
 }
 
-function ReportView({ bookingsWithCalc, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, printPage, exportCSV }) {
+function ReportView({ bookingsWithCalc, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, printPage, exportCSV, exportDailyReportExcel }) {
   const dayNum = new Date(date).getDate();
   const paidTotal = bookingsWithCalc.filter(b => b.paymentStatus === 'PAID').reduce((s, b) => s + b.total, 0);
   const pendingTotal = bookingsWithCalc.filter(b => b.paymentStatus !== 'PAID').reduce((s, b) => s + b.total, 0);
@@ -808,8 +1073,9 @@ function ReportView({ bookingsWithCalc, date, formatDate, colors, totalRevenue, 
           <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>End-of-day summary</p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="btn" onClick={exportCSV}><Download size={14} /> Export CSV</button>
-          <button className="btn btn-primary" onClick={printPage}><Printer size={14} /> Print</button>
+          <button className="btn" onClick={exportCSV}><Download size={14} /> CSV</button>
+          <button className="btn btn-primary" onClick={exportDailyReportExcel}><FileSpreadsheet size={14} /> Excel</button>
+          <button className="btn" onClick={printPage}><Printer size={14} /> Print</button>
         </div>
       </div>
       <div style={{ background: 'white', padding: '32px', borderRadius: '8px', border: `1px solid ${colors.border}` }}>
