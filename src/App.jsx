@@ -1,8 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import { Plus, Trash2, FileText, Grid3x3, Download, Printer, Save, RotateCcw, Users, DollarSign, Clock, BookUser, TrendingUp, AlertCircle, Repeat, Search, X, Check, Phone, MapPin, Edit2, ChevronRight, FileSpreadsheet } from 'lucide-react';
+import { Plus, Trash2, FileText, Grid3x3, Download, Printer, Save, RotateCcw, Users, DollarSign, Clock, BookUser, TrendingUp, AlertCircle, Repeat, Search, X, Check, Phone, MapPin, Edit2, ChevronRight, FileSpreadsheet, CalendarDays, Truck, Home, Building2, Navigation } from 'lucide-react';
 
 const CLEANERS = ['Leah', 'Eva', 'Zainab', 'Roselyn', 'Coline', 'Angel', 'Razelle'];
+const PICKUP_TYPES = ['HOME', 'OFFICE'];
+// Cleaner colors for map pins (distinct, easy to differentiate)
+const CLEANER_COLORS = {
+  'Leah': '#E63946',     // Red
+  'Eva': '#1D4ED8',      // Blue
+  'Zainab': '#10B981',   // Emerald
+  'Roselyn': '#F59E0B',  // Amber
+  'Coline': '#8B5CF6',   // Purple
+  'Angel': '#EC4899',    // Pink
+  'Razelle': '#0F4C3A'   // Dark green
+};
 const PAYMENT_TYPES = ['ONLINE', 'CASH'];
 const PAYMENT_STATUS = ['PAID', 'PENDING'];
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -23,7 +34,9 @@ const parseHours = (timing) => {
 const emptyBooking = () => ({
   id: Date.now() + Math.random(),
   cleaner: 'Leah', timing: '', clientId: null, clientName: '', location: '', phone: '',
-  withMaterials: false, pricePerHour: 25, paymentType: 'ONLINE', paymentStatus: 'PENDING', notes: ''
+  withMaterials: false, pricePerHour: 25, paymentType: 'ONLINE', paymentStatus: 'PENDING', notes: '',
+  pickupType: 'OFFICE', // HOME or OFFICE - where driver picks cleaner up before this job
+  lat: null, lng: null  // location coordinates (auto-geocoded or manually set)
 });
 
 const emptyClient = () => ({
@@ -47,6 +60,8 @@ export default function CleaningApp() {
   const [contracts, setContracts] = useState([]);
   const [statusMsg, setStatusMsg] = useState('');
   const [clientPickerFor, setClientPickerFor] = useState(null);
+  const [cleanerHomes, setCleanerHomes] = useState({}); // { Leah: { address, lat, lng }, ... }
+  const [officeAddress, setOfficeAddress] = useState({ address: 'Office, Abu Dhabi', lat: 24.4539, lng: 54.3773 });
 
   useEffect(() => {
     try {
@@ -65,6 +80,14 @@ export default function CleaningApp() {
     try {
       const contractsRaw = localStorage.getItem('sparkle_contracts');
       if (contractsRaw) setContracts(JSON.parse(contractsRaw));
+    } catch (e) {}
+    try {
+      const homesRaw = localStorage.getItem('sparkle_cleaner_homes');
+      if (homesRaw) setCleanerHomes(JSON.parse(homesRaw));
+    } catch (e) {}
+    try {
+      const officeRaw = localStorage.getItem('sparkle_office');
+      if (officeRaw) setOfficeAddress(JSON.parse(officeRaw));
     } catch (e) {}
   }, []);
 
@@ -104,6 +127,16 @@ export default function CleaningApp() {
   const saveContracts = (next) => {
     setContracts(next);
     try { localStorage.setItem('sparkle_contracts', JSON.stringify(next)); } catch (e) {}
+  };
+
+  const saveCleanerHomes = (next) => {
+    setCleanerHomes(next);
+    try { localStorage.setItem('sparkle_cleaner_homes', JSON.stringify(next)); } catch (e) {}
+  };
+
+  const saveOfficeAddress = (next) => {
+    setOfficeAddress(next);
+    try { localStorage.setItem('sparkle_office', JSON.stringify(next)); } catch (e) {}
   };
 
   const generateFromContracts = () => {
@@ -167,165 +200,195 @@ export default function CleaningApp() {
     a.href = url; a.download = `report_${date}.csv`; a.click();
   };
 
-  // ===== EXCEL EXPORT FUNCTIONS (STYLED) =====
+  // ===== EXCEL EXPORT FUNCTIONS (matching deployment grid style) =====
+  // Color palette matching the app:
+  //   Green header: #0F4C3A
+  //   Cream cleaner header: #F5EFD9
+  //   Mint green for materials: #D4E8DC
+  //   Red AED prices: #B8472A
+  //   Cream alt row: #FAF8F3
 
-  // Style helpers
-  const STYLE_HEADER = {
-    font: { name: 'Calibri', sz: 12, bold: true, color: { rgb: 'FFFFFFFF' } },
-    fill: { patternType: 'solid', fgColor: { rgb: 'FF0F4C3A' } },
-    alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
-    border: {
-      top: { style: 'thin', color: { rgb: 'FF1A1A1A' } },
-      bottom: { style: 'thin', color: { rgb: 'FF1A1A1A' } },
-      left: { style: 'thin', color: { rgb: 'FF1A1A1A' } },
-      right: { style: 'thin', color: { rgb: 'FF1A1A1A' } }
-    }
+  const RGB = {
+    green: 'FF0F4C3A',
+    cream: 'FFF5EFD9',
+    mint: 'FFD4E8DC',
+    red: 'FFB8472A',
+    altRow: 'FFFAF8F3',
+    white: 'FFFFFFFF',
+    ink: 'FF1A1A1A',
+    border: 'FFD4CFC0',
+    paidBg: 'FFD4E8DC',
+    pendingBg: 'FFFEE2E2',
+    pendingText: 'FFB8472A',
+    paidText: 'FF0F4C3A',
+    yellowAccent: 'FFFFF59D'
   };
+
+  const borderAll = (color = RGB.ink, style = 'thin') => ({
+    top: { style, color: { rgb: color } },
+    bottom: { style, color: { rgb: color } },
+    left: { style, color: { rgb: color } },
+    right: { style, color: { rgb: color } }
+  });
+
+  // Title banner — green background, white bold text (matches deployment grid header)
   const STYLE_TITLE = {
-    font: { name: 'Calibri', sz: 16, bold: true, color: { rgb: 'FFFFFFFF' } },
-    fill: { patternType: 'solid', fgColor: { rgb: 'FF0F4C3A' } },
-    alignment: { horizontal: 'center', vertical: 'center' }
-  };
-  const STYLE_SUBTITLE = {
-    font: { name: 'Calibri', sz: 11, italic: true, color: { rgb: 'FF555555' } },
-    alignment: { horizontal: 'center', vertical: 'center' }
-  };
-  const STYLE_CELL = {
-    font: { name: 'Calibri', sz: 11 },
-    alignment: { vertical: 'center', wrapText: true },
-    border: {
-      top: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-      bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-      left: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-      right: { style: 'thin', color: { rgb: 'FFD4CFC0' } }
-    }
-  };
-  const STYLE_CELL_ALT = {
-    ...{
-      font: { name: 'Calibri', sz: 11 },
-      alignment: { vertical: 'center', wrapText: true },
-      border: {
-        top: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-        bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-        left: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-        right: { style: 'thin', color: { rgb: 'FFD4CFC0' } }
-      }
-    },
-    fill: { patternType: 'solid', fgColor: { rgb: 'FFFAF8F3' } }
-  };
-  const STYLE_TOTAL = {
-    font: { name: 'Calibri', sz: 12, bold: true, color: { rgb: 'FF0F4C3A' } },
-    fill: { patternType: 'solid', fgColor: { rgb: 'FFE8F0EC' } },
-    alignment: { vertical: 'center' },
-    border: {
-      top: { style: 'medium', color: { rgb: 'FF0F4C3A' } },
-      bottom: { style: 'medium', color: { rgb: 'FF0F4C3A' } },
-      left: { style: 'thin', color: { rgb: 'FF0F4C3A' } },
-      right: { style: 'thin', color: { rgb: 'FF0F4C3A' } }
-    }
-  };
-  const STYLE_PAID = {
-    font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: 'FF0F4C3A' } },
-    fill: { patternType: 'solid', fgColor: { rgb: 'FFD4E8DC' } },
+    font: { name: 'Calibri', sz: 16, bold: true, color: { rgb: RGB.white } },
+    fill: { patternType: 'solid', fgColor: { rgb: RGB.green } },
     alignment: { horizontal: 'center', vertical: 'center' },
-    border: {
-      top: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-      bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-      left: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-      right: { style: 'thin', color: { rgb: 'FFD4CFC0' } }
-    }
+    border: borderAll(RGB.ink, 'medium')
+  };
+
+  // Subtitle — green background, italic white
+  const STYLE_SUBTITLE = {
+    font: { name: 'Calibri', sz: 11, italic: true, color: { rgb: RGB.white } },
+    fill: { patternType: 'solid', fgColor: { rgb: RGB.green } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: borderAll(RGB.ink, 'medium')
+  };
+
+  // Header row — cream background with bold black text (like cleaner names in your grid)
+  const STYLE_HEADER = {
+    font: { name: 'Calibri', sz: 12, bold: true, color: { rgb: RGB.ink } },
+    fill: { patternType: 'solid', fgColor: { rgb: RGB.cream } },
+    alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+    border: borderAll(RGB.ink, 'thin')
+  };
+
+  // Regular cell — white background
+  const STYLE_CELL = {
+    font: { name: 'Calibri', sz: 11, color: { rgb: RGB.ink } },
+    fill: { patternType: 'solid', fgColor: { rgb: RGB.white } },
+    alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+    border: borderAll(RGB.ink, 'thin')
+  };
+
+  // Alt row — cream
+  const STYLE_CELL_ALT = {
+    font: { name: 'Calibri', sz: 11, color: { rgb: RGB.ink } },
+    fill: { patternType: 'solid', fgColor: { rgb: RGB.altRow } },
+    alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+    border: borderAll(RGB.ink, 'thin')
+  };
+
+  // Mint green — for "with materials" rows (matches grid)
+  const STYLE_CELL_MATERIALS = {
+    font: { name: 'Calibri', sz: 11, color: { rgb: RGB.ink } },
+    fill: { patternType: 'solid', fgColor: { rgb: RGB.mint } },
+    alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+    border: borderAll(RGB.ink, 'thin')
+  };
+
+  // Total row — green background, white bold (like title banner)
+  const STYLE_TOTAL = {
+    font: { name: 'Calibri', sz: 12, bold: true, color: { rgb: RGB.white } },
+    fill: { patternType: 'solid', fgColor: { rgb: RGB.green } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: borderAll(RGB.ink, 'medium')
+  };
+
+  // Red AED prices — bold red on white (matches grid)
+  const STYLE_PRICE = {
+    font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: RGB.red } },
+    fill: { patternType: 'solid', fgColor: { rgb: RGB.white } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: borderAll(RGB.ink, 'thin')
+  };
+  const STYLE_PRICE_MAT = {
+    font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: RGB.red } },
+    fill: { patternType: 'solid', fgColor: { rgb: RGB.mint } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: borderAll(RGB.ink, 'thin')
+  };
+  const STYLE_PRICE_ALT = {
+    font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: RGB.red } },
+    fill: { patternType: 'solid', fgColor: { rgb: RGB.altRow } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: borderAll(RGB.ink, 'thin')
+  };
+
+  // Status badges
+  const STYLE_PAID = {
+    font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: RGB.paidText } },
+    fill: { patternType: 'solid', fgColor: { rgb: RGB.paidBg } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: borderAll(RGB.ink, 'thin')
   };
   const STYLE_PENDING = {
-    font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: 'FFB8472A' } },
-    fill: { patternType: 'solid', fgColor: { rgb: 'FFFEE2E2' } },
+    font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: RGB.pendingText } },
+    fill: { patternType: 'solid', fgColor: { rgb: RGB.pendingBg } },
     alignment: { horizontal: 'center', vertical: 'center' },
-    border: {
-      top: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-      bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-      left: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-      right: { style: 'thin', color: { rgb: 'FFD4CFC0' } }
-    }
-  };
-  const STYLE_MATERIALS = {
-    font: { name: 'Calibri', sz: 11, color: { rgb: 'FF0F4C3A' } },
-    fill: { patternType: 'solid', fgColor: { rgb: 'FFD4E8DC' } },
-    alignment: { vertical: 'center', wrapText: true },
-    border: {
-      top: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-      bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-      left: { style: 'thin', color: { rgb: 'FFD4CFC0' } },
-      right: { style: 'thin', color: { rgb: 'FFD4CFC0' } }
-    }
+    border: borderAll(RGB.ink, 'thin')
   };
 
-  // Helper: build a styled sheet from headers + rows
-  const buildStyledSheet = (title, subtitle, headers, rows, colWidths, options = {}) => {
+  // Builder helper — produces a worksheet that visually matches the app's design
+  const buildStyledSheet = (title, subtitle, headers, rows, colWidths, opts = {}) => {
+    const { totalRow, statusCol, materialsCol, priceCol, materialsHighlight = true } = opts;
     const ws = {};
-    const range = { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } };
-    
+    const cols = headers.length;
+
     // Row 0: Title (merged)
-    ws[XLSX.utils.encode_cell({ r: 0, c: 0 })] = { v: title, t: 's', s: STYLE_TITLE };
-    for (let c = 1; c < headers.length; c++) {
-      ws[XLSX.utils.encode_cell({ r: 0, c })] = { v: '', t: 's', s: STYLE_TITLE };
+    for (let c = 0; c < cols; c++) {
+      ws[XLSX.utils.encode_cell({ r: 0, c })] = { v: c === 0 ? title : '', t: 's', s: STYLE_TITLE };
     }
-    
     // Row 1: Subtitle (merged)
-    ws[XLSX.utils.encode_cell({ r: 1, c: 0 })] = { v: subtitle, t: 's', s: STYLE_SUBTITLE };
-    for (let c = 1; c < headers.length; c++) {
-      ws[XLSX.utils.encode_cell({ r: 1, c })] = { v: '', t: 's', s: STYLE_SUBTITLE };
+    for (let c = 0; c < cols; c++) {
+      ws[XLSX.utils.encode_cell({ r: 1, c })] = { v: c === 0 ? subtitle : '', t: 's', s: STYLE_SUBTITLE };
     }
-    
-    // Row 2: Empty spacer
-    // Row 3: Headers
+    // Row 2: Headers (cream cells like cleaner names in deployment grid)
     headers.forEach((h, c) => {
-      ws[XLSX.utils.encode_cell({ r: 3, c })] = { v: h, t: 's', s: STYLE_HEADER };
+      ws[XLSX.utils.encode_cell({ r: 2, c })] = { v: h, t: 's', s: STYLE_HEADER };
     });
-    
-    // Row 4+: Data rows with alternating colors
+
+    // Data rows: row 3+
     rows.forEach((row, rIdx) => {
-      const r = rIdx + 4;
+      const r = rIdx + 3;
+      const isTotalRow = totalRow && rIdx === rows.length - 1;
+      // Detect if row has materials = Yes
+      const hasMaterials = materialsHighlight && materialsCol !== undefined && row[materialsCol] === 'Yes';
       const alt = rIdx % 2 === 1;
+
       row.forEach((cell, c) => {
-        const isLast = options.totalRow && rIdx === rows.length - 1;
-        let style = alt ? STYLE_CELL_ALT : STYLE_CELL;
-        if (isLast) style = STYLE_TOTAL;
-        // Status column styling
-        if (options.statusCol !== undefined && c === options.statusCol && !isLast) {
-          if (cell === 'PAID') style = STYLE_PAID;
-          else if (cell === 'PENDING') style = STYLE_PENDING;
-        }
-        // Materials column
-        if (options.materialsCol !== undefined && c === options.materialsCol && !isLast && cell === 'Yes') {
-          style = STYLE_MATERIALS;
+        let style;
+        if (isTotalRow) {
+          style = STYLE_TOTAL;
+        } else if (statusCol !== undefined && c === statusCol) {
+          style = cell === 'PAID' ? STYLE_PAID : STYLE_PENDING;
+        } else if (priceCol !== undefined && c === priceCol) {
+          // Red bold price cell — background depends on materials/alt
+          if (hasMaterials) style = STYLE_PRICE_MAT;
+          else if (alt) style = STYLE_PRICE_ALT;
+          else style = STYLE_PRICE;
+        } else if (hasMaterials) {
+          style = STYLE_CELL_MATERIALS;
+        } else if (alt) {
+          style = STYLE_CELL_ALT;
+        } else {
+          style = STYLE_CELL;
         }
         const isNumber = typeof cell === 'number';
         ws[XLSX.utils.encode_cell({ r, c })] = { v: cell, t: isNumber ? 'n' : 's', s: style };
       });
     });
-    
-    // Set range
-    const lastRow = rows.length + 3;
-    ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: lastRow, c: headers.length - 1 } });
-    
-    // Merge title and subtitle rows
+
+    const lastRow = rows.length + 2;
+    ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: lastRow, c: cols - 1 } });
     ws['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } },
-      { s: { r: 1, c: 0 }, e: { r: 1, c: headers.length - 1 } }
+      { s: { r: 0, c: 0 }, e: { r: 0, c: cols - 1 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: cols - 1 } }
     ];
-    
-    // Column widths
     ws['!cols'] = colWidths.map(w => ({ wch: w }));
-    
-    // Row heights: title row taller
-    ws['!rows'] = [{ hpt: 28 }, { hpt: 18 }, { hpt: 8 }, { hpt: 24 }];
-    
+    // Row heights: title big, subtitle medium, header tall, data normal
+    const rowHeights = [{ hpt: 32 }, { hpt: 20 }, { hpt: 28 }];
+    for (let i = 0; i < rows.length; i++) rowHeights.push({ hpt: 22 });
+    ws['!rows'] = rowHeights;
     return ws;
   };
 
   const formatLongDate = (d) => new Date(d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
   const exportDailyReportExcel = () => {
-    const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MATERIALS', 'HOURS', 'RATE', 'TOTAL', 'PAY TYPE', 'STATUS'];
+    const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MAT.', 'HRS', 'RATE', 'TOTAL (AED)', 'PAY', 'STATUS'];
     const dayNum = new Date(date).getDate();
     const rows = bookingsWithCalc.map(b => [
       dayNum, b.cleaner, b.timing, b.clientName, b.location, b.phone || '',
@@ -333,8 +396,10 @@ export default function CleaningApp() {
       Number(b.total.toFixed(2)), b.paymentType, b.paymentStatus || 'PENDING'
     ]);
     rows.push(['', '', '', '', '', '', 'TOTAL', Number(totalHours.toFixed(1)), '', Number(totalRevenue.toFixed(2)), '', '']);
-    const widths = [6, 12, 12, 22, 32, 16, 11, 8, 8, 10, 12, 12];
-    const ws = buildStyledSheet('Sparkle Operations — Daily Report', formatLongDate(date), headers, rows, widths, { totalRow: true, statusCol: 11, materialsCol: 6 });
+    const widths = [6, 12, 12, 22, 32, 16, 8, 8, 8, 14, 10, 12];
+    const ws = buildStyledSheet('DEPLOYMENT — DAILY REPORT', formatLongDate(date), headers, rows, widths, {
+      totalRow: true, statusCol: 11, materialsCol: 6, priceCol: 9
+    });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Daily Report');
     XLSX.writeFile(wb, `daily_report_${date}.xlsx`);
@@ -342,7 +407,7 @@ export default function CleaningApp() {
   };
 
   const exportClientsExcel = () => {
-    const headers = ['NAME', 'PHONE', 'ADDRESS', 'DEFAULT RATE/HR', 'MATERIALS', 'TOTAL VISITS', 'TOTAL REVENUE', 'NOTES'];
+    const headers = ['NAME', 'PHONE', 'ADDRESS', 'RATE/HR', 'MAT.', 'VISITS', 'TOTAL REVENUE (AED)', 'NOTES'];
     const rows = clients.map(c => {
       const visits = allBookingsWithDate.filter(b => b.clientId === c.id);
       return [
@@ -351,8 +416,10 @@ export default function CleaningApp() {
         Number(visits.reduce((s, b) => s + (b.total || 0), 0).toFixed(2)), c.notes || ''
       ];
     });
-    const widths = [22, 18, 38, 14, 12, 12, 14, 28];
-    const ws = buildStyledSheet('Sparkle Operations — Client Database', `${clients.length} clients · Generated ${new Date().toLocaleDateString()}`, headers, rows, widths, { materialsCol: 4 });
+    const widths = [22, 18, 38, 10, 8, 10, 18, 28];
+    const ws = buildStyledSheet('SPARKLE OPERATIONS — CLIENT DATABASE', `${clients.length} clients · Generated ${new Date().toLocaleDateString()}`, headers, rows, widths, {
+      materialsCol: 4, priceCol: 6
+    });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Clients');
     XLSX.writeFile(wb, `clients_${new Date().toISOString().split('T')[0]}.xlsx`);
@@ -360,14 +427,16 @@ export default function CleaningApp() {
   };
 
   const exportContractsExcel = () => {
-    const headers = ['CLIENT', 'CLEANER', 'DAYS', 'TIMING', 'RATE/HR', 'MATERIALS', 'PAYMENT', 'STATUS', 'START DATE'];
+    const headers = ['CLIENT', 'CLEANER', 'DAYS', 'TIMING', 'RATE/HR', 'MAT.', 'PAYMENT', 'STATUS'];
     const rows = contracts.map(c => [
       c.clientName, c.cleaner, c.daysOfWeek.map(d => DAYS[d]).join(', '),
       c.timing, Number(c.pricePerHour), c.withMaterials ? 'Yes' : 'No',
-      c.paymentType, c.active ? 'Active' : 'Paused', c.startDate || ''
+      c.paymentType, c.active ? 'Active' : 'Paused'
     ]);
-    const widths = [22, 12, 26, 14, 10, 12, 12, 10, 14];
-    const ws = buildStyledSheet('Sparkle Operations — Recurring Contracts', `${contracts.filter(c => c.active).length} active contracts · Generated ${new Date().toLocaleDateString()}`, headers, rows, widths, { materialsCol: 5 });
+    const widths = [22, 12, 26, 14, 10, 8, 12, 10];
+    const ws = buildStyledSheet('SPARKLE OPERATIONS — RECURRING CONTRACTS', `${contracts.filter(c => c.active).length} active contracts`, headers, rows, widths, {
+      materialsCol: 5, priceCol: 4
+    });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Contracts');
     XLSX.writeFile(wb, `contracts_${new Date().toISOString().split('T')[0]}.xlsx`);
@@ -376,8 +445,7 @@ export default function CleaningApp() {
 
   const exportEarningsExcel = (period, filtered) => {
     const periodLabel = period === 'week' ? 'Last 7 days' : period === 'month' ? 'This month' : 'All time';
-    // Summary sheet
-    const sumHeaders = ['CLEANER', 'JOBS', 'HOURS', 'UNIQUE CLIENTS', 'CASH (AED)', 'ONLINE (AED)', 'TOTAL (AED)'];
+    const sumHeaders = ['CLEANER', 'JOBS', 'HOURS', 'CLIENTS', 'CASH (AED)', 'ONLINE (AED)', 'TOTAL (AED)'];
     const sumRows = CLEANERS.map(name => {
       const jobs = filtered.filter(b => b.cleaner === name);
       return [
@@ -397,18 +465,17 @@ export default function CleaningApp() {
       Number(filtered.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
       Number(filtered.reduce((s, b) => s + (b.total || 0), 0).toFixed(2))
     ]);
-    const sumWidths = [16, 8, 10, 16, 14, 14, 14];
-    const wsSum = buildStyledSheet('Sparkle Operations — Cleaner Earnings', `${periodLabel} · ${filtered.length} jobs`, sumHeaders, sumRows, sumWidths, { totalRow: true });
+    const wsSum = buildStyledSheet('SPARKLE OPERATIONS — CLEANER EARNINGS', `${periodLabel} · ${filtered.length} jobs`, sumHeaders, sumRows, [16, 8, 10, 10, 14, 14, 14], { totalRow: true, priceCol: 6 });
 
-    // Detail sheet
-    const detHeaders = ['DATE', 'CLEANER', 'CLIENT', 'LOCATION', 'TIMING', 'HOURS', 'RATE', 'TOTAL', 'PAY TYPE', 'STATUS'];
+    const detHeaders = ['DATE', 'CLEANER', 'CLIENT', 'LOCATION', 'TIMING', 'MAT.', 'HRS', 'RATE', 'TOTAL (AED)', 'PAY', 'STATUS'];
     const detRows = filtered.map(b => [
       b.date, b.cleaner, b.clientName, b.location, b.timing,
-      Number(b.hours), Number(b.pricePerHour), Number((b.total || 0).toFixed(2)),
-      b.paymentType, b.paymentStatus || 'PENDING'
+      b.withMaterials ? 'Yes' : 'No', Number(b.hours), Number(b.pricePerHour),
+      Number((b.total || 0).toFixed(2)), b.paymentType, b.paymentStatus || 'PENDING'
     ]);
-    const detWidths = [12, 14, 22, 32, 12, 8, 8, 10, 12, 12];
-    const wsDet = buildStyledSheet('Sparkle Operations — Earnings Detail', `${periodLabel} · all individual jobs`, detHeaders, detRows, detWidths, { statusCol: 9 });
+    const wsDet = buildStyledSheet('EARNINGS DETAIL', `${periodLabel} · all individual jobs`, detHeaders, detRows, [12, 14, 22, 32, 12, 8, 8, 8, 14, 10, 12], {
+      statusCol: 10, materialsCol: 5, priceCol: 8
+    });
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, wsSum, 'Summary');
@@ -420,7 +487,7 @@ export default function CleaningApp() {
   const exportPendingExcel = () => {
     const pending = allBookingsWithDate.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
     const today = new Date().setHours(0, 0, 0, 0);
-    const headers = ['DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'HOURS', 'AMOUNT (AED)', 'PAY TYPE', 'DAYS OVERDUE'];
+    const headers = ['DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'HRS', 'AMOUNT (AED)', 'PAY', 'DAYS OVERDUE'];
     const rows = pending.map(b => {
       const overdue = Math.floor((today - new Date(b.date).setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24));
       return [
@@ -430,12 +497,177 @@ export default function CleaningApp() {
     });
     const totalAmount = pending.reduce((s, b) => s + b.total, 0);
     rows.push(['', '', '', '', '', '', 'TOTAL OWED', Number(totalAmount.toFixed(2)), '', '']);
-    const widths = [12, 22, 18, 32, 14, 12, 8, 14, 12, 14];
-    const ws = buildStyledSheet('Sparkle Operations — Pending Payments', `${pending.length} unpaid jobs · ${totalAmount.toFixed(2)} AED outstanding`, headers, rows, widths, { totalRow: true });
+    const widths = [12, 22, 18, 32, 14, 12, 8, 14, 10, 14];
+    const ws = buildStyledSheet('SPARKLE OPERATIONS — PENDING PAYMENTS', `${pending.length} unpaid jobs · ${totalAmount.toFixed(2)} AED outstanding`, headers, rows, widths, {
+      totalRow: true, priceCol: 7
+    });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Pending Payments');
     XLSX.writeFile(wb, `pending_payments_${new Date().toISOString().split('T')[0]}.xlsx`);
     showStatus('✓ Excel downloaded');
+  };
+
+  // Monthly export — comprehensive workbook for chosen month, filterable from UI
+  const exportMonthlyExcel = (year, month) => {
+    // month is 0-indexed (0=Jan, 11=Dec)
+    const monthStart = new Date(year, month, 1);
+    const monthEnd = new Date(year, month + 1, 0);
+    const monthName = monthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    const monthNameShort = monthStart.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }).replace(' ', '_');
+
+    // Filter bookings for this month
+    const monthBookings = allBookingsWithDate.filter(b => {
+      const d = new Date(b.date);
+      return d >= monthStart && d <= monthEnd;
+    });
+
+    if (monthBookings.length === 0) {
+      showStatus('No data for this month');
+      return;
+    }
+
+    const wb = XLSX.utils.book_new();
+
+    // === SHEET 1: Monthly Overview ===
+    const overviewHeaders = ['METRIC', 'VALUE'];
+    const totalJobs = monthBookings.length;
+    const totalHrs = monthBookings.reduce((s, b) => s + (b.hours || 0), 0);
+    const totalRev = monthBookings.reduce((s, b) => s + (b.total || 0), 0);
+    const cashTot = monthBookings.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0);
+    const onlineTot = monthBookings.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0);
+    const paidTot = monthBookings.filter(b => b.paymentStatus === 'PAID').reduce((s, b) => s + (b.total || 0), 0);
+    const pendingTot = monthBookings.filter(b => b.paymentStatus !== 'PAID').reduce((s, b) => s + (b.total || 0), 0);
+    const uniqueClients = new Set(monthBookings.map(b => b.clientName)).size;
+    const activeDays = new Set(monthBookings.map(b => b.date)).size;
+    const overviewRows = [
+      ['Total Jobs Completed', totalJobs],
+      ['Total Hours Worked', Number(totalHrs.toFixed(1))],
+      ['Active Working Days', activeDays],
+      ['Unique Clients Served', uniqueClients],
+      ['Cash Collected (AED)', Number(cashTot.toFixed(2))],
+      ['Online Collected (AED)', Number(onlineTot.toFixed(2))],
+      ['Paid So Far (AED)', Number(paidTot.toFixed(2))],
+      ['Pending Payments (AED)', Number(pendingTot.toFixed(2))],
+      ['TOTAL REVENUE (AED)', Number(totalRev.toFixed(2))]
+    ];
+    const wsOverview = buildStyledSheet(`MONTHLY REPORT — ${monthName.toUpperCase()}`, `${totalJobs} jobs · ${totalHrs.toFixed(1)} hours · ${totalRev.toFixed(2)} AED`, overviewHeaders, overviewRows, [32, 22], { totalRow: true });
+    XLSX.utils.book_append_sheet(wb, wsOverview, 'Overview');
+
+    // === SHEET 2: Daily Breakdown ===
+    const byDay = {};
+    monthBookings.forEach(b => {
+      if (!byDay[b.date]) byDay[b.date] = { date: b.date, jobs: 0, hours: 0, revenue: 0, cash: 0, online: 0 };
+      byDay[b.date].jobs += 1;
+      byDay[b.date].hours += (b.hours || 0);
+      byDay[b.date].revenue += (b.total || 0);
+      if (b.paymentType === 'CASH') byDay[b.date].cash += (b.total || 0);
+      else byDay[b.date].online += (b.total || 0);
+    });
+    const dailyHeaders = ['DATE', 'DAY', 'JOBS', 'HOURS', 'CASH (AED)', 'ONLINE (AED)', 'TOTAL (AED)'];
+    const dailyRows = Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date)).map(d => [
+      d.date,
+      new Date(d.date).toLocaleDateString('en-US', { weekday: 'short' }),
+      d.jobs,
+      Number(d.hours.toFixed(1)),
+      Number(d.cash.toFixed(2)),
+      Number(d.online.toFixed(2)),
+      Number(d.revenue.toFixed(2))
+    ]);
+    dailyRows.push([
+      'MONTH TOTAL', '', totalJobs, Number(totalHrs.toFixed(1)),
+      Number(cashTot.toFixed(2)), Number(onlineTot.toFixed(2)), Number(totalRev.toFixed(2))
+    ]);
+    const wsDaily = buildStyledSheet('DAILY BREAKDOWN', `${activeDays} active working days in ${monthName}`, dailyHeaders, dailyRows, [12, 8, 8, 10, 14, 14, 14], { totalRow: true, priceCol: 6 });
+    XLSX.utils.book_append_sheet(wb, wsDaily, 'Daily');
+
+    // === SHEET 3: All Jobs Detail ===
+    const jobsHeaders = ['DATE', 'DAY', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MAT.', 'HRS', 'RATE', 'TOTAL (AED)', 'PAY', 'STATUS'];
+    const jobsRows = monthBookings
+      .sort((a, b) => a.date.localeCompare(b.date) || a.cleaner.localeCompare(b.cleaner))
+      .map(b => [
+        b.date,
+        new Date(b.date).toLocaleDateString('en-US', { weekday: 'short' }),
+        b.cleaner, b.timing, b.clientName, b.location, b.phone || '',
+        b.withMaterials ? 'Yes' : 'No', Number(b.hours), Number(b.pricePerHour),
+        Number((b.total || 0).toFixed(2)), b.paymentType, b.paymentStatus || 'PENDING'
+      ]);
+    const wsJobs = buildStyledSheet('ALL JOBS — DETAILED', `${totalJobs} jobs in ${monthName}`, jobsHeaders, jobsRows, [12, 8, 12, 12, 22, 32, 16, 8, 8, 8, 14, 10, 12], {
+      statusCol: 12, materialsCol: 7, priceCol: 10
+    });
+    XLSX.utils.book_append_sheet(wb, wsJobs, 'All Jobs');
+
+    // === SHEET 4: By Cleaner ===
+    const cleanerHeaders = ['CLEANER', 'JOBS', 'HOURS', 'CLIENTS', 'CASH (AED)', 'ONLINE (AED)', 'PAID (AED)', 'PENDING (AED)', 'TOTAL (AED)'];
+    const cleanerRows = CLEANERS.map(name => {
+      const jobs = monthBookings.filter(b => b.cleaner === name);
+      return [
+        name, jobs.length,
+        Number(jobs.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1)),
+        new Set(jobs.map(b => b.clientName)).size,
+        Number(jobs.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+        Number(jobs.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+        Number(jobs.filter(b => b.paymentStatus === 'PAID').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+        Number(jobs.filter(b => b.paymentStatus !== 'PAID').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+        Number(jobs.reduce((s, b) => s + (b.total || 0), 0).toFixed(2))
+      ];
+    }).filter(r => r[1] > 0); // Only show cleaners who worked
+    cleanerRows.push([
+      'GRAND TOTAL', totalJobs, Number(totalHrs.toFixed(1)), uniqueClients,
+      Number(cashTot.toFixed(2)), Number(onlineTot.toFixed(2)),
+      Number(paidTot.toFixed(2)), Number(pendingTot.toFixed(2)), Number(totalRev.toFixed(2))
+    ]);
+    const wsCleaners = buildStyledSheet('PERFORMANCE BY CLEANER', monthName, cleanerHeaders, cleanerRows, [16, 8, 10, 10, 14, 14, 14, 14, 14], { totalRow: true, priceCol: 8 });
+    XLSX.utils.book_append_sheet(wb, wsCleaners, 'By Cleaner');
+
+    // === SHEET 5: By Client ===
+    const clientGroups = {};
+    monthBookings.forEach(b => {
+      const k = b.clientName || 'Unknown';
+      if (!clientGroups[k]) clientGroups[k] = { name: k, phone: b.phone || '', address: b.location || '', jobs: 0, hours: 0, revenue: 0, paid: 0, pending: 0 };
+      clientGroups[k].jobs += 1;
+      clientGroups[k].hours += (b.hours || 0);
+      clientGroups[k].revenue += (b.total || 0);
+      if (b.paymentStatus === 'PAID') clientGroups[k].paid += (b.total || 0);
+      else clientGroups[k].pending += (b.total || 0);
+    });
+    const clientHeaders = ['CLIENT', 'PHONE', 'LOCATION', 'VISITS', 'HOURS', 'PAID (AED)', 'PENDING (AED)', 'TOTAL (AED)'];
+    const clientRows = Object.values(clientGroups)
+      .sort((a, b) => b.revenue - a.revenue)
+      .map(c => [
+        c.name, c.phone, c.address, c.jobs,
+        Number(c.hours.toFixed(1)),
+        Number(c.paid.toFixed(2)),
+        Number(c.pending.toFixed(2)),
+        Number(c.revenue.toFixed(2))
+      ]);
+    clientRows.push([
+      'TOTAL', '', '', totalJobs, Number(totalHrs.toFixed(1)),
+      Number(paidTot.toFixed(2)), Number(pendingTot.toFixed(2)), Number(totalRev.toFixed(2))
+    ]);
+    const wsClients = buildStyledSheet('REVENUE BY CLIENT', `${Object.keys(clientGroups).length} unique clients in ${monthName}`, clientHeaders, clientRows, [22, 18, 32, 8, 10, 14, 14, 14], { totalRow: true, priceCol: 7 });
+    XLSX.utils.book_append_sheet(wb, wsClients, 'By Client');
+
+    // === SHEET 6: Pending Payments (this month) ===
+    const monthPending = monthBookings.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
+    if (monthPending.length > 0) {
+      const todaySafe = new Date().setHours(0, 0, 0, 0);
+      const pendHeaders = ['DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'AMOUNT (AED)', 'PAY', 'DAYS OVERDUE'];
+      const pendRows = monthPending
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map(b => {
+          const overdue = Math.floor((todaySafe - new Date(b.date).setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24));
+          return [
+            b.date, b.clientName, b.phone || '', b.location, b.cleaner, b.timing,
+            Number(b.total.toFixed(2)), b.paymentType, overdue > 0 ? overdue : 0
+          ];
+        });
+      pendRows.push(['', '', '', '', '', 'TOTAL OWED', Number(pendingTot.toFixed(2)), '', '']);
+      const wsPend = buildStyledSheet('PENDING PAYMENTS', `${monthPending.length} unpaid · ${pendingTot.toFixed(2)} AED owed`, pendHeaders, pendRows, [12, 22, 18, 32, 14, 12, 14, 10, 14], { totalRow: true, priceCol: 6 });
+      XLSX.utils.book_append_sheet(wb, wsPend, 'Pending');
+    }
+
+    XLSX.writeFile(wb, `monthly_report_${monthNameShort}.xlsx`);
+    showStatus(`✓ ${monthName} report downloaded`);
   };
 
   const exportEverythingExcel = () => {
@@ -443,7 +675,7 @@ export default function CleaningApp() {
 
     // Sheet 1: Today
     if (bookingsWithCalc.length > 0) {
-      const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MATERIALS', 'HOURS', 'RATE', 'TOTAL', 'PAY TYPE', 'STATUS'];
+      const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MAT.', 'HRS', 'RATE', 'TOTAL (AED)', 'PAY', 'STATUS'];
       const dayNum = new Date(date).getDate();
       const rows = bookingsWithCalc.map(b => [
         dayNum, b.cleaner, b.timing, b.clientName, b.location, b.phone || '',
@@ -451,25 +683,29 @@ export default function CleaningApp() {
         Number(b.total.toFixed(2)), b.paymentType, b.paymentStatus || 'PENDING'
       ]);
       rows.push(['', '', '', '', '', '', 'TOTAL', Number(totalHours.toFixed(1)), '', Number(totalRevenue.toFixed(2)), '', '']);
-      const ws = buildStyledSheet('Today — Daily Report', formatLongDate(date), headers, rows, [6, 12, 12, 22, 32, 16, 11, 8, 8, 10, 12, 12], { totalRow: true, statusCol: 11, materialsCol: 6 });
+      const ws = buildStyledSheet('TODAY — DAILY REPORT', formatLongDate(date), headers, rows, [6, 12, 12, 22, 32, 16, 8, 8, 8, 14, 10, 12], {
+        totalRow: true, statusCol: 11, materialsCol: 6, priceCol: 9
+      });
       XLSX.utils.book_append_sheet(wb, ws, 'Today');
     }
 
     // Sheet 2: All History
     if (allBookingsWithDate.length > 0) {
-      const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MATERIALS', 'HOURS', 'RATE', 'TOTAL', 'PAY TYPE', 'STATUS'];
+      const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MAT.', 'HRS', 'RATE', 'TOTAL (AED)', 'PAY', 'STATUS'];
       const rows = allBookingsWithDate.map(b => [
         b.date, b.cleaner, b.timing, b.clientName, b.location, b.phone || '',
         b.withMaterials ? 'Yes' : 'No', Number(b.hours), Number(b.pricePerHour),
         Number((b.total || 0).toFixed(2)), b.paymentType, b.paymentStatus || 'PENDING'
       ]);
-      const ws = buildStyledSheet('All History', `${allBookingsWithDate.length} total jobs`, headers, rows, [12, 12, 12, 22, 32, 16, 11, 8, 8, 10, 12, 12], { statusCol: 11, materialsCol: 6 });
+      const ws = buildStyledSheet('ALL HISTORY', `${allBookingsWithDate.length} total jobs`, headers, rows, [12, 12, 12, 22, 32, 16, 8, 8, 8, 14, 10, 12], {
+        statusCol: 11, materialsCol: 6, priceCol: 9
+      });
       XLSX.utils.book_append_sheet(wb, ws, 'History');
     }
 
     // Sheet 3: Clients
     if (clients.length > 0) {
-      const headers = ['NAME', 'PHONE', 'ADDRESS', 'DEFAULT RATE/HR', 'MATERIALS', 'TOTAL VISITS', 'TOTAL REVENUE', 'NOTES'];
+      const headers = ['NAME', 'PHONE', 'ADDRESS', 'RATE/HR', 'MAT.', 'VISITS', 'TOTAL REVENUE (AED)', 'NOTES'];
       const rows = clients.map(c => {
         const visits = allBookingsWithDate.filter(b => b.clientId === c.id);
         return [
@@ -478,24 +714,28 @@ export default function CleaningApp() {
           Number(visits.reduce((s, b) => s + (b.total || 0), 0).toFixed(2)), c.notes || ''
         ];
       });
-      const ws = buildStyledSheet('Client Database', `${clients.length} clients`, headers, rows, [22, 18, 38, 14, 12, 12, 14, 28], { materialsCol: 4 });
+      const ws = buildStyledSheet('CLIENT DATABASE', `${clients.length} clients`, headers, rows, [22, 18, 38, 10, 8, 10, 18, 28], {
+        materialsCol: 4, priceCol: 6
+      });
       XLSX.utils.book_append_sheet(wb, ws, 'Clients');
     }
 
     // Sheet 4: Contracts
     if (contracts.length > 0) {
-      const headers = ['CLIENT', 'CLEANER', 'DAYS', 'TIMING', 'RATE/HR', 'MATERIALS', 'PAYMENT', 'STATUS'];
+      const headers = ['CLIENT', 'CLEANER', 'DAYS', 'TIMING', 'RATE/HR', 'MAT.', 'PAYMENT', 'STATUS'];
       const rows = contracts.map(c => [
         c.clientName, c.cleaner, c.daysOfWeek.map(d => DAYS[d]).join(', '),
         c.timing, Number(c.pricePerHour), c.withMaterials ? 'Yes' : 'No',
         c.paymentType, c.active ? 'Active' : 'Paused'
       ]);
-      const ws = buildStyledSheet('Recurring Contracts', `${contracts.filter(c => c.active).length} active`, headers, rows, [22, 12, 26, 14, 10, 12, 12, 10], { materialsCol: 5 });
+      const ws = buildStyledSheet('RECURRING CONTRACTS', `${contracts.filter(c => c.active).length} active`, headers, rows, [22, 12, 26, 14, 10, 8, 12, 10], {
+        materialsCol: 5, priceCol: 4
+      });
       XLSX.utils.book_append_sheet(wb, ws, 'Contracts');
     }
 
     // Sheet 5: Earnings (all-time)
-    const earnHeaders = ['CLEANER', 'JOBS', 'HOURS', 'UNIQUE CLIENTS', 'CASH (AED)', 'ONLINE (AED)', 'TOTAL (AED)'];
+    const earnHeaders = ['CLEANER', 'JOBS', 'HOURS', 'CLIENTS', 'CASH (AED)', 'ONLINE (AED)', 'TOTAL (AED)'];
     const earnRows = CLEANERS.map(name => {
       const jobs = allBookingsWithDate.filter(b => b.cleaner === name);
       return [
@@ -515,14 +755,14 @@ export default function CleaningApp() {
       Number(allBookingsWithDate.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
       Number(allBookingsWithDate.reduce((s, b) => s + (b.total || 0), 0).toFixed(2))
     ]);
-    const wsEarn = buildStyledSheet('Cleaner Earnings — All Time', `${allBookingsWithDate.length} total jobs`, earnHeaders, earnRows, [16, 8, 10, 16, 14, 14, 14], { totalRow: true });
+    const wsEarn = buildStyledSheet('CLEANER EARNINGS — ALL TIME', `${allBookingsWithDate.length} total jobs`, earnHeaders, earnRows, [16, 8, 10, 10, 14, 14, 14], { totalRow: true, priceCol: 6 });
     XLSX.utils.book_append_sheet(wb, wsEarn, 'Earnings');
 
     // Sheet 6: Pending
     const pending = allBookingsWithDate.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
     if (pending.length > 0) {
       const todaySafe = new Date().setHours(0, 0, 0, 0);
-      const headers = ['DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'AMOUNT (AED)', 'PAY TYPE', 'DAYS OVERDUE'];
+      const headers = ['DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'AMOUNT (AED)', 'PAY', 'DAYS OVERDUE'];
       const rows = pending.map(b => {
         const overdue = Math.floor((todaySafe - new Date(b.date).setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24));
         return [
@@ -532,7 +772,7 @@ export default function CleaningApp() {
       });
       const totalOwed = pending.reduce((s, b) => s + b.total, 0);
       rows.push(['', '', '', '', '', 'TOTAL OWED', Number(totalOwed.toFixed(2)), '', '']);
-      const ws = buildStyledSheet('Pending Payments', `${pending.length} unpaid · ${totalOwed.toFixed(2)} AED owed`, headers, rows, [12, 22, 18, 32, 14, 12, 14, 12, 14], { totalRow: true });
+      const ws = buildStyledSheet('PENDING PAYMENTS', `${pending.length} unpaid · ${totalOwed.toFixed(2)} AED owed`, headers, rows, [12, 22, 18, 32, 14, 12, 14, 10, 14], { totalRow: true, priceCol: 6 });
       XLSX.utils.book_append_sheet(wb, ws, 'Pending');
     }
 
@@ -599,6 +839,8 @@ export default function CleaningApp() {
           <button className={`tab ${view === 'contracts' ? 'active' : ''}`} onClick={() => setView('contracts')}><Repeat size={15} /> Contracts ({contracts.filter(c=>c.active).length})</button>
           <button className={`tab ${view === 'earnings' ? 'active' : ''}`} onClick={() => setView('earnings')}><TrendingUp size={15} /> Earnings</button>
           <button className={`tab ${view === 'pending' ? 'active' : ''}`} onClick={() => setView('pending')}><AlertCircle size={15} /> Pending</button>
+          <button className={`tab ${view === 'monthly' ? 'active' : ''}`} onClick={() => setView('monthly')}><CalendarDays size={15} /> Monthly Report</button>
+          <button className={`tab ${view === 'driver' ? 'active' : ''}`} onClick={() => setView('driver')}><Truck size={15} /> Driver</button>
         </div>
       </div>
 
@@ -610,6 +852,8 @@ export default function CleaningApp() {
         {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} exportContractsExcel={exportContractsExcel} />}
         {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} />}
+        {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
+        {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={CLEANERS} updateBooking={updateBooking} />}
       </div>
 
       {clientPickerFor && <ClientPickerModal clients={clients} onPick={(c) => applyClientToBooking(clientPickerFor, c)} onClose={() => setClientPickerFor(null)} colors={colors} />}
@@ -662,7 +906,7 @@ function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, remo
             <thead>
               <tr style={{ background: colors.soft }}>
                 <Th>Cleaner</Th><Th>Time</Th><Th>Client</Th><Th>Location / Phone</Th>
-                <Th>Mat.</Th><Th>Rate</Th><Th>Hrs</Th><Th>Total</Th><Th>Pay</Th><Th>Status</Th><Th></Th>
+                <Th>Pickup</Th><Th>Mat.</Th><Th>Rate</Th><Th>Hrs</Th><Th>Total</Th><Th>Pay</Th><Th>Status</Th><Th></Th>
               </tr>
             </thead>
             <tbody>
@@ -684,6 +928,11 @@ function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, remo
                     <Td>
                       <input className="input" placeholder="Apt 101 Bldg" value={b.location} onChange={e => updateBooking(b.id, 'location', e.target.value)} style={{ marginBottom: '3px', minWidth: '180px' }} />
                       <input className="input" placeholder="Phone" value={b.phone || ''} onChange={e => updateBooking(b.id, 'phone', e.target.value)} style={{ fontSize: '11px', padding: '4px 8px', minWidth: '180px' }} />
+                    </Td>
+                    <Td>
+                      <select className="select" value={b.pickupType || 'OFFICE'} onChange={e => updateBooking(b.id, 'pickupType', e.target.value)} style={{ width: '85px', fontSize: '11px' }}>
+                        {PICKUP_TYPES.map(p => <option key={p}>{p}</option>)}
+                      </select>
                     </Td>
                     <Td style={{ textAlign: 'center' }}>
                       <input type="checkbox" checked={b.withMaterials} onChange={e => updateBooking(b.id, 'withMaterials', e.target.checked)} style={{ transform: 'scale(1.3)', cursor: 'pointer' }} />
@@ -1253,6 +1502,693 @@ function ReportView({ bookingsWithCalc, date, formatDate, colors, totalRevenue, 
         </div>
         {bookingsWithCalc.length === 0 && <div style={{ textAlign: 'center', padding: '40px', color: colors.ink + '66' }}>No bookings yet.</div>}
       </div>
+    </div>
+  );
+}
+
+function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, saveCleanerHomes, officeAddress, saveOfficeAddress, CLEANER_COLORS, CLEANERS, updateBooking }) {
+  const [showSetup, setShowSetup] = React.useState(false);
+  const mapRef = React.useRef(null);
+  const mapInstanceRef = React.useRef(null);
+  const markersLayerRef = React.useRef(null);
+  const [geocodingStatus, setGeocodingStatus] = React.useState('');
+
+  // Build the driver's run schedule
+  // Sort bookings by start time
+  const parseStartTime = (timing) => {
+    if (!timing) return 999;
+    const m = timing.replace(/\s/g, '').match(/(\d+)(?::(\d+))?/);
+    if (!m) return 999;
+    let h = parseInt(m[1]);
+    const mn = parseInt(m[2] || 0);
+    return h + mn / 60;
+  };
+  const parseEndTime = (timing) => {
+    if (!timing) return 999;
+    const m = timing.replace(/\s/g, '').match(/-(\d+)(?::(\d+))?/);
+    if (!m) return 999;
+    let h = parseInt(m[1]);
+    const mn = parseInt(m[2] || 0);
+    const start = parseStartTime(timing);
+    if (h < start) h += 12;
+    return h + mn / 60;
+  };
+
+  const sorted = [...bookingsWithCalc].filter(b => b.location).sort((a, b) =>
+    parseStartTime(a.timing) - parseStartTime(b.timing)
+  );
+
+  // Build the run: pickup events + drop-off events
+  // Group by cleaner to figure out pickup origin
+  const cleanerBookings = {};
+  CLEANERS.forEach(c => cleanerBookings[c] = []);
+  sorted.forEach(b => { if (cleanerBookings[b.cleaner]) cleanerBookings[b.cleaner].push(b); });
+
+  const runEvents = [];
+  CLEANERS.forEach(cleaner => {
+    const jobs = cleanerBookings[cleaner].sort((a, b) => parseStartTime(a.timing) - parseStartTime(b.timing));
+    if (jobs.length === 0) return;
+    jobs.forEach((job, idx) => {
+      // Pickup origin
+      let originLabel, originAddress;
+      if (idx === 0) {
+        // First job — pickup from home or office based on booking
+        if (job.pickupType === 'HOME') {
+          originLabel = `${cleaner}'s home`;
+          originAddress = cleanerHomes[cleaner]?.address || `${cleaner}'s home address (not set)`;
+        } else {
+          originLabel = 'Office';
+          originAddress = officeAddress.address;
+        }
+      } else {
+        // Subsequent job — coming from previous job location
+        originLabel = `${cleaner} from ${jobs[idx - 1].clientName}`;
+        originAddress = jobs[idx - 1].location;
+      }
+      runEvents.push({
+        type: 'DROP',
+        time: parseStartTime(job.timing),
+        timeLabel: job.timing.split('-')[0] || job.timing,
+        cleaner,
+        clientName: job.clientName,
+        location: job.location,
+        phone: job.phone,
+        originLabel,
+        originAddress,
+        bookingId: job.id,
+        lat: job.lat,
+        lng: job.lng
+      });
+    });
+    // End-of-day pickup
+    const lastJob = jobs[jobs.length - 1];
+    runEvents.push({
+      type: 'PICKUP',
+      time: parseEndTime(lastJob.timing) + 0.001, // tiny offset for sort stability
+      timeLabel: lastJob.timing.split('-')[1] || '',
+      cleaner,
+      clientName: lastJob.clientName,
+      location: lastJob.location,
+      phone: lastJob.phone,
+      bookingId: lastJob.id,
+      lat: lastJob.lat,
+      lng: lastJob.lng
+    });
+  });
+  runEvents.sort((a, b) => a.time - b.time);
+
+  const formatTime = (t) => {
+    const h = Math.floor(t);
+    const m = Math.round((t - h) * 60);
+    return `${h}:${m.toString().padStart(2, '0')}`;
+  };
+
+  const openInGoogleMaps = (location) => {
+    const q = encodeURIComponent(location + ', Abu Dhabi, UAE');
+    window.open(`https://www.google.com/maps/search/?api=1&query=${q}`, '_blank');
+  };
+
+  // Geocode addresses without coordinates using OpenStreetMap Nominatim (free, no API key)
+  const geocodeAddress = async (address) => {
+    try {
+      const q = encodeURIComponent(address + ', Abu Dhabi, UAE');
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${q}&limit=1`);
+      const data = await res.json();
+      if (data && data[0]) {
+        return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+      }
+    } catch (e) { console.error(e); }
+    return null;
+  };
+
+  const geocodeAllMissing = async () => {
+    setGeocodingStatus('Looking up addresses...');
+    let count = 0;
+    for (const b of bookingsWithCalc) {
+      if ((!b.lat || !b.lng) && b.location) {
+        const coords = await geocodeAddress(b.location);
+        if (coords) {
+          updateBooking(b.id, 'lat', coords.lat);
+          updateBooking(b.id, 'lng', coords.lng);
+          count++;
+        }
+        // Wait 1.1s between requests (Nominatim rate limit)
+        await new Promise(r => setTimeout(r, 1100));
+      }
+    }
+    setGeocodingStatus(`✓ Found ${count} location${count !== 1 ? 's' : ''}`);
+    setTimeout(() => setGeocodingStatus(''), 3000);
+  };
+
+  // Initialize Leaflet map
+  React.useEffect(() => {
+    // Inject Leaflet CSS once
+    if (!document.getElementById('leaflet-css')) {
+      const link = document.createElement('link');
+      link.id = 'leaflet-css';
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(link);
+    }
+    // Wait briefly for CSS, then init
+    const initMap = async () => {
+      const L = (await import('leaflet')).default;
+      if (!mapRef.current || mapInstanceRef.current) return;
+      // Default center: Abu Dhabi
+      const map = L.map(mapRef.current).setView([24.4539, 54.3773], 11);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap'
+      }).addTo(map);
+      mapInstanceRef.current = map;
+      markersLayerRef.current = L.layerGroup().addTo(map);
+    };
+    initMap();
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+    };
+  }, []);
+
+  // Update markers when bookings change
+  React.useEffect(() => {
+    const updateMarkers = async () => {
+      if (!mapInstanceRef.current || !markersLayerRef.current) return;
+      const L = (await import('leaflet')).default;
+      markersLayerRef.current.clearLayers();
+      const points = [];
+
+      // Add office marker
+      if (officeAddress.lat && officeAddress.lng) {
+        const officeIcon = L.divIcon({
+          className: 'custom-marker',
+          html: `<div style="background:#1A1A1A;color:white;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);">🏢</div>`,
+          iconSize: [32, 32],
+          iconAnchor: [16, 16]
+        });
+        L.marker([officeAddress.lat, officeAddress.lng], { icon: officeIcon })
+          .bindPopup(`<b>Office</b><br>${officeAddress.address}`)
+          .addTo(markersLayerRef.current);
+        points.push([officeAddress.lat, officeAddress.lng]);
+      }
+
+      // Add booking markers
+      bookingsWithCalc.forEach((b, idx) => {
+        if (b.lat && b.lng) {
+          const color = CLEANER_COLORS[b.cleaner] || '#0F4C3A';
+          const icon = L.divIcon({
+            className: 'custom-marker',
+            html: `<div style="background:${color};color:white;width:36px;height:36px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.4);">
+                     <span style="transform:rotate(45deg);font-size:11px;font-weight:700;">${b.cleaner.charAt(0)}</span>
+                   </div>`,
+            iconSize: [36, 36],
+            iconAnchor: [18, 36]
+          });
+          L.marker([b.lat, b.lng], { icon })
+            .bindPopup(`
+              <div style="font-family:sans-serif;min-width:200px;">
+                <div style="font-weight:700;color:${color};font-size:14px;margin-bottom:4px;">${b.cleaner}</div>
+                <div style="font-weight:600;font-size:13px;">${b.clientName}</div>
+                <div style="font-size:11px;color:#666;margin:3px 0;">${b.location}</div>
+                <div style="font-size:12px;font-weight:600;">⏰ ${b.timing}</div>
+                ${b.phone ? `<div style="font-size:12px;margin-top:3px;">📞 ${b.phone}</div>` : ''}
+                <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(b.location + ', Abu Dhabi, UAE')}" target="_blank" style="display:inline-block;margin-top:6px;padding:4px 8px;background:#0F4C3A;color:white;text-decoration:none;border-radius:4px;font-size:11px;font-weight:600;">📍 Open in Maps</a>
+              </div>
+            `)
+            .addTo(markersLayerRef.current);
+          points.push([b.lat, b.lng]);
+        }
+      });
+
+      // Add cleaner home markers (only those with bookings today)
+      const activeCleaners = new Set(bookingsWithCalc.filter(b => b.pickupType === 'HOME').map(b => b.cleaner));
+      activeCleaners.forEach(cleaner => {
+        const home = cleanerHomes[cleaner];
+        if (home && home.lat && home.lng) {
+          const color = CLEANER_COLORS[cleaner] || '#0F4C3A';
+          const icon = L.divIcon({
+            className: 'custom-marker',
+            html: `<div style="background:white;border:3px solid ${color};width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;box-shadow:0 2px 4px rgba(0,0,0,0.3);">🏠</div>`,
+            iconSize: [30, 30],
+            iconAnchor: [15, 15]
+          });
+          L.marker([home.lat, home.lng], { icon })
+            .bindPopup(`<b>${cleaner}'s home</b><br>${home.address}`)
+            .addTo(markersLayerRef.current);
+          points.push([home.lat, home.lng]);
+        }
+      });
+
+      // Fit map to show all points
+      if (points.length > 0) {
+        mapInstanceRef.current.fitBounds(points, { padding: [40, 40], maxZoom: 13 });
+      }
+    };
+    updateMarkers();
+  }, [bookingsWithCalc, cleanerHomes, officeAddress]);
+
+  const cleanersWithBookings = [...new Set(bookingsWithCalc.map(b => b.cleaner))];
+  const bookingsWithoutCoords = bookingsWithCalc.filter(b => b.location && (!b.lat || !b.lng)).length;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Driver Schedule</h2>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>{formatDate(date)} · {runEvents.length} stops</p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button className="btn" onClick={() => setShowSetup(true)}>
+            <Home size={14} /> Setup Addresses
+          </button>
+          {bookingsWithoutCoords > 0 && (
+            <button className="btn btn-primary" onClick={geocodeAllMissing}>
+              <MapPin size={14} /> Find {bookingsWithoutCoords} location{bookingsWithoutCoords > 1 ? 's' : ''} on map
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={() => window.print()}>
+            <Printer size={14} /> Print
+          </button>
+        </div>
+      </div>
+
+      {geocodingStatus && (
+        <div style={{ padding: '10px 14px', background: colors.accentLight, border: `1px solid ${colors.accent}`, borderRadius: '8px', marginBottom: '16px', color: colors.accent, fontWeight: 600, fontSize: '13px' }}>
+          {geocodingStatus}
+        </div>
+      )}
+
+      {bookingsWithCalc.length === 0 ? (
+        <div style={{ background: 'white', borderRadius: '12px', border: `1px dashed ${colors.border}`, padding: '60px 20px', textAlign: 'center', color: colors.ink + '99' }}>
+          <Truck size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
+          <h3 style={{ margin: '0 0 8px' }}>No bookings for this day yet</h3>
+          <p style={{ fontSize: '13px', margin: 0 }}>Add bookings on the Bookings tab to see the driver schedule.</p>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }} className="driver-grid">
+          <style>{`
+            @media (max-width: 900px) { .driver-grid { grid-template-columns: 1fr !important; } }
+            @media print { .driver-grid { grid-template-columns: 1fr !important; } }
+          `}</style>
+
+          {/* MAP */}
+          <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}>
+            <div style={{ padding: '12px 16px', borderBottom: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+              <h3 className="display-font" style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📍 Map</h3>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11px' }}>
+                {cleanersWithBookings.map(c => (
+                  <span key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: CLEANER_COLORS[c] || '#999' }}></span>
+                    {c}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div ref={mapRef} style={{ height: '500px', width: '100%', background: '#f0f0f0' }}></div>
+            {bookingsWithoutCoords > 0 && (
+              <div style={{ padding: '10px 16px', background: '#FEF3C7', fontSize: '12px', color: colors.warning, borderTop: `1px solid ${colors.border}` }}>
+                ⚠️ {bookingsWithoutCoords} address{bookingsWithoutCoords > 1 ? 'es' : ''} not on map yet — click "Find locations on map" above
+              </div>
+            )}
+          </div>
+
+          {/* RUN LIST */}
+          <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}>
+            <div style={{ padding: '12px 16px', borderBottom: `1px solid ${colors.border}` }}>
+              <h3 className="display-font" style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>🚐 Driver Run · sorted by time</h3>
+            </div>
+            <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
+              {runEvents.map((event, idx) => {
+                const color = CLEANER_COLORS[event.cleaner] || '#0F4C3A';
+                const isPickup = event.type === 'PICKUP';
+                return (
+                  <div key={idx} style={{
+                    padding: '12px 16px',
+                    borderBottom: idx < runEvents.length - 1 ? `1px solid ${colors.border}` : 'none',
+                    display: 'flex',
+                    gap: '12px',
+                    alignItems: 'flex-start',
+                    background: isPickup ? '#FFF8E7' : 'white'
+                  }}>
+                    <div style={{
+                      flexShrink: 0,
+                      width: '54px',
+                      textAlign: 'center',
+                      fontFamily: 'JetBrains Mono, monospace',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      color: colors.ink,
+                      paddingTop: '2px'
+                    }}>
+                      {event.timeLabel}
+                    </div>
+                    <div style={{
+                      flexShrink: 0,
+                      width: '4px',
+                      borderRadius: '2px',
+                      background: color,
+                      alignSelf: 'stretch',
+                      minHeight: '40px'
+                    }}></div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px', flexWrap: 'wrap' }}>
+                        <span style={{
+                          padding: '1px 8px',
+                          borderRadius: '10px',
+                          background: isPickup ? '#FEF3C7' : color,
+                          color: isPickup ? colors.warning : 'white',
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          textTransform: 'uppercase'
+                        }}>
+                          {isPickup ? '🔄 Collect' : '📍 Drop'}
+                        </span>
+                        <span style={{ fontWeight: 700, fontSize: '14px', color }}>{event.cleaner}</span>
+                      </div>
+                      {!isPickup && (
+                        <div style={{ fontSize: '12px', color: colors.ink + '99', marginBottom: '3px' }}>
+                          From: <strong>{event.originLabel}</strong>
+                          {event.originAddress && event.originAddress !== event.originLabel && (
+                            <span style={{ color: colors.ink + '77' }}> · {event.originAddress}</span>
+                          )}
+                        </div>
+                      )}
+                      <div style={{ fontWeight: 600, fontSize: '13px' }}>
+                        {isPickup ? 'Pick up from: ' : 'To: '}
+                        {event.clientName}
+                      </div>
+                      <div style={{ fontSize: '12px', color: colors.ink + 'AA', margin: '2px 0' }}>{event.location}</div>
+                      {event.phone && (
+                        <div style={{ fontSize: '11px', color: colors.ink + '99', display: 'inline-flex', alignItems: 'center', gap: '4px', marginRight: '10px' }}>
+                          <Phone size={11} /> <a href={`tel:${event.phone}`} style={{ color: colors.ink + '99', textDecoration: 'none' }}>{event.phone}</a>
+                        </div>
+                      )}
+                      <button className="btn btn-sm" style={{ marginTop: '4px', padding: '4px 8px', fontSize: '11px' }} onClick={() => openInGoogleMaps(event.location)}>
+                        <Navigation size={11} /> Open in Maps
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+              {runEvents.length === 0 && (
+                <div style={{ padding: '40px', textAlign: 'center', color: colors.ink + '66', fontSize: '13px' }}>
+                  No stops yet. Add bookings to build the driver run.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSetup && (
+        <DriverSetupModal
+          cleanerHomes={cleanerHomes}
+          saveCleanerHomes={saveCleanerHomes}
+          officeAddress={officeAddress}
+          saveOfficeAddress={saveOfficeAddress}
+          CLEANERS={CLEANERS}
+          CLEANER_COLORS={CLEANER_COLORS}
+          colors={colors}
+          onClose={() => setShowSetup(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function DriverSetupModal({ cleanerHomes, saveCleanerHomes, officeAddress, saveOfficeAddress, CLEANERS, CLEANER_COLORS, colors, onClose }) {
+  const [office, setOffice] = React.useState(officeAddress);
+  const [homes, setHomes] = React.useState(cleanerHomes);
+  const [geocoding, setGeocoding] = React.useState('');
+
+  const geocode = async (address) => {
+    try {
+      const q = encodeURIComponent(address + ', Abu Dhabi, UAE');
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${q}&limit=1`);
+      const data = await res.json();
+      if (data && data[0]) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+    } catch (e) {}
+    return null;
+  };
+
+  const save = async () => {
+    setGeocoding('Looking up addresses...');
+    // Geocode office if address changed
+    let updatedOffice = { ...office };
+    if (office.address && office.address !== officeAddress.address) {
+      const c = await geocode(office.address);
+      if (c) { updatedOffice.lat = c.lat; updatedOffice.lng = c.lng; }
+    }
+    saveOfficeAddress(updatedOffice);
+
+    // Geocode each home that changed
+    const updatedHomes = { ...homes };
+    for (const cleaner of CLEANERS) {
+      const h = updatedHomes[cleaner];
+      if (h && h.address) {
+        const oldH = cleanerHomes[cleaner];
+        if (!oldH || oldH.address !== h.address) {
+          const c = await geocode(h.address);
+          if (c) { h.lat = c.lat; h.lng = c.lng; }
+          await new Promise(r => setTimeout(r, 1100));
+        }
+      }
+    }
+    saveCleanerHomes(updatedHomes);
+    setGeocoding('✓ Saved');
+    setTimeout(() => onClose(), 600);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '700px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <h3 className="display-font" style={{ margin: 0, fontSize: '22px', fontWeight: 700 }}>Setup Addresses</h3>
+          <button className="btn btn-sm" onClick={onClose} style={{ padding: '6px' }}><X size={14} /></button>
+        </div>
+
+        <p style={{ margin: '0 0 16px', fontSize: '13px', color: colors.ink + '99' }}>
+          Set the office address and each cleaner's home address. Used by the driver to know where to pick up cleaners in the morning.
+        </p>
+
+        <div style={{ marginBottom: '20px' }}>
+          <h4 className="display-font" style={{ margin: '0 0 10px', fontSize: '15px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Building2 size={16} /> Office
+          </h4>
+          <input className="input" placeholder="Office address, area, Abu Dhabi" value={office.address || ''} onChange={e => setOffice({ ...office, address: e.target.value })} />
+        </div>
+
+        <div>
+          <h4 className="display-font" style={{ margin: '0 0 10px', fontSize: '15px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Home size={16} /> Cleaners' Homes
+          </h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {CLEANERS.map(cleaner => (
+              <div key={cleaner} style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <div style={{
+                  flexShrink: 0,
+                  width: '90px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}>
+                  <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: CLEANER_COLORS[cleaner] }}></span>
+                  <span style={{ fontWeight: 600, fontSize: '13px' }}>{cleaner}</span>
+                </div>
+                <input
+                  className="input"
+                  placeholder="Home address (optional, only if pickup is from home)"
+                  value={homes[cleaner]?.address || ''}
+                  onChange={e => setHomes({ ...homes, [cleaner]: { ...(homes[cleaner] || {}), address: e.target.value } })}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {geocoding && (
+          <div style={{ marginTop: '14px', padding: '8px 12px', background: colors.accentLight, color: colors.accent, borderRadius: '6px', fontSize: '13px', fontWeight: 600 }}>
+            {geocoding}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '20px' }}>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={save}><Save size={14} /> Save All</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MonthlyView({ allBookings, CLEANERS, colors, exportMonthlyExcel }) {
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth());
+
+  const monthStart = new Date(year, month, 1);
+  const monthEnd = new Date(year, month + 1, 0);
+  const monthName = monthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const filtered = allBookings.filter(b => {
+    const d = new Date(b.date);
+    return d >= monthStart && d <= monthEnd;
+  });
+
+  const totalJobs = filtered.length;
+  const totalHrs = filtered.reduce((s, b) => s + (b.hours || 0), 0);
+  const totalRev = filtered.reduce((s, b) => s + (b.total || 0), 0);
+  const cashTot = filtered.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0);
+  const onlineTot = filtered.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0);
+  const paidTot = filtered.filter(b => b.paymentStatus === 'PAID').reduce((s, b) => s + (b.total || 0), 0);
+  const pendingTot = filtered.filter(b => b.paymentStatus !== 'PAID').reduce((s, b) => s + (b.total || 0), 0);
+  const uniqueClients = new Set(filtered.map(b => b.clientName)).size;
+  const activeDays = new Set(filtered.map(b => b.date)).size;
+
+  // Per-cleaner breakdown
+  const cleanerStats = CLEANERS.map(name => {
+    const jobs = filtered.filter(b => b.cleaner === name);
+    return {
+      name, jobs: jobs.length,
+      hours: jobs.reduce((s, b) => s + (b.hours || 0), 0),
+      revenue: jobs.reduce((s, b) => s + (b.total || 0), 0)
+    };
+  }).filter(s => s.jobs > 0).sort((a, b) => b.revenue - a.revenue);
+
+  // Per-day breakdown
+  const dayMap = {};
+  filtered.forEach(b => {
+    if (!dayMap[b.date]) dayMap[b.date] = { date: b.date, jobs: 0, revenue: 0 };
+    dayMap[b.date].jobs += 1;
+    dayMap[b.date].revenue += (b.total || 0);
+  });
+  const dailyData = Object.values(dayMap).sort((a, b) => a.date.localeCompare(b.date));
+
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const yearOptions = [];
+  for (let y = now.getFullYear() - 2; y <= now.getFullYear() + 1; y++) yearOptions.push(y);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Monthly Report</h2>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Complete monthly business record · ready to save to OneDrive/Drive</p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <select className="select" value={month} onChange={e => setMonth(parseInt(e.target.value))} style={{ width: 'auto' }}>
+            {months.map((m, i) => <option key={i} value={i}>{m}</option>)}
+          </select>
+          <select className="select" value={year} onChange={e => setYear(parseInt(e.target.value))} style={{ width: 'auto' }}>
+            {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+          {filtered.length > 0 && (
+            <button className="btn btn-primary" onClick={() => exportMonthlyExcel(year, month)}>
+              <FileSpreadsheet size={14} /> Download {months[month]} Excel
+            </button>
+          )}
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{ background: 'white', borderRadius: '12px', border: `1px dashed ${colors.border}`, padding: '60px 20px', textAlign: 'center', color: colors.ink + '99' }}>
+          <CalendarDays size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
+          <h3 style={{ margin: '0 0 8px' }}>No bookings recorded for {monthName}</h3>
+          <p style={{ fontSize: '13px', margin: '0 0 16px' }}>Add bookings on the Bookings tab to see them here. Save your day to make sure data is recorded.</p>
+        </div>
+      ) : (
+        <>
+          {/* TOP STATS */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginBottom: '20px' }}>
+            <StatCard icon={<DollarSign size={18} />} label="Revenue" value={`${totalRev.toFixed(0)} AED`} color={colors.accent} colors={colors} />
+            <StatCard icon={<Clock size={18} />} label="Hours" value={`${totalHrs.toFixed(1)}`} color={colors.gold} colors={colors} />
+            <StatCard icon={<FileText size={18} />} label="Jobs" value={totalJobs} color={colors.rust} colors={colors} />
+            <StatCard icon={<CalendarDays size={18} />} label="Active Days" value={activeDays} color={colors.ink} colors={colors} />
+            <StatCard icon={<Users size={18} />} label="Clients" value={uniqueClients} color={colors.ink} colors={colors} />
+          </div>
+
+          {/* PAYMENT SUMMARY */}
+          <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px', marginBottom: '20px' }}>
+            <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>Payment Summary</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px' }}>
+              <div style={{ padding: '12px', borderRadius: '8px', border: `1.5px solid ${colors.border}` }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', color: colors.ink + '99', fontWeight: 600 }}>Cash</div>
+                <div className="display-font" style={{ fontSize: '20px', fontWeight: 700, color: colors.rust }}>{cashTot.toFixed(0)} AED</div>
+              </div>
+              <div style={{ padding: '12px', borderRadius: '8px', border: `1.5px solid ${colors.border}` }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', color: colors.ink + '99', fontWeight: 600 }}>Online</div>
+                <div className="display-font" style={{ fontSize: '20px', fontWeight: 700, color: colors.accent }}>{onlineTot.toFixed(0)} AED</div>
+              </div>
+              <div style={{ padding: '12px', borderRadius: '8px', border: `1.5px solid ${colors.accent}`, background: colors.accentLight }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', color: colors.ink + '99', fontWeight: 600 }}>Paid</div>
+                <div className="display-font" style={{ fontSize: '20px', fontWeight: 700, color: colors.accent }}>{paidTot.toFixed(0)} AED</div>
+              </div>
+              <div style={{ padding: '12px', borderRadius: '8px', border: `1.5px solid ${pendingTot > 0 ? colors.warning : colors.border}`, background: pendingTot > 0 ? '#FEF3C7' : 'transparent' }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', color: colors.ink + '99', fontWeight: 600 }}>Pending</div>
+                <div className="display-font" style={{ fontSize: '20px', fontWeight: 700, color: pendingTot > 0 ? colors.warning : colors.ink }}>{pendingTot.toFixed(0)} AED</div>
+              </div>
+            </div>
+          </div>
+
+          {/* BY CLEANER */}
+          <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px', marginBottom: '20px' }}>
+            <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>Performance by Cleaner</h3>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ background: colors.soft }}>
+                    <Th>Cleaner</Th><Th>Jobs</Th><Th>Hours</Th><Th>Revenue (AED)</Th><Th>Share</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cleanerStats.map(s => (
+                    <tr key={s.name} style={{ borderTop: `1px solid ${colors.border}` }}>
+                      <Td style={{ fontWeight: 600 }}>{s.name}</Td>
+                      <Td>{s.jobs}</Td>
+                      <Td className="mono">{s.hours.toFixed(1)}</Td>
+                      <Td className="mono" style={{ fontWeight: 700, color: colors.accent }}>{s.revenue.toFixed(2)}</Td>
+                      <Td>
+                        <div style={{ background: colors.soft, height: '8px', borderRadius: '4px', width: '100px', overflow: 'hidden' }}>
+                          <div style={{ width: `${(s.revenue / totalRev) * 100}%`, height: '100%', background: `linear-gradient(90deg, ${colors.accent}, ${colors.gold})` }}></div>
+                        </div>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* DAILY BREAKDOWN */}
+          <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px' }}>
+            <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>Daily Breakdown</h3>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ background: colors.soft }}>
+                    <Th>Date</Th><Th>Day</Th><Th>Jobs</Th><Th>Revenue (AED)</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dailyData.map(d => (
+                    <tr key={d.date} style={{ borderTop: `1px solid ${colors.border}` }}>
+                      <Td className="mono">{new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</Td>
+                      <Td>{new Date(d.date).toLocaleDateString('en-US', { weekday: 'short' })}</Td>
+                      <Td>{d.jobs}</Td>
+                      <Td className="mono" style={{ fontWeight: 700, color: colors.accent }}>{d.revenue.toFixed(2)}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div style={{ marginTop: '20px', padding: '16px', background: colors.accentLight, borderRadius: '10px', border: `1px solid ${colors.accent}33`, fontSize: '13px', color: colors.ink + 'CC' }}>
+            <strong style={{ color: colors.accent }}>💡 Tip:</strong> Click "Download {monthName} Excel" above to get a professionally formatted Excel file with 6 sheets: Overview, Daily, All Jobs, By Cleaner, By Client, and Pending. Save it to OneDrive or Google Drive for access from any laptop.
+          </div>
+        </>
+      )}
     </div>
   );
 }
