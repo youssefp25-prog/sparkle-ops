@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx-js-style';
-import { Plus, Trash2, FileText, Grid3x3, Download, Printer, Save, RotateCcw, Users, DollarSign, Clock, BookUser, TrendingUp, AlertCircle, Repeat, Search, X, Check, Phone, MapPin, Edit2, ChevronRight, FileSpreadsheet, CalendarDays, Truck, Home, Building2, Navigation } from 'lucide-react';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
+import { Plus, Trash2, FileText, Grid3x3, Download, Printer, Save, RotateCcw, Users, DollarSign, Clock, BookUser, TrendingUp, AlertCircle, Repeat, Search, X, Check, Phone, MapPin, Edit2, ChevronRight, FileSpreadsheet, CalendarDays, Truck, Home, Building2, Navigation, Receipt, Settings as SettingsIcon, Mail, Hash } from 'lucide-react';
 
 const CLEANERS = ['Leah', 'Eva', 'Zainab', 'Roselyn', 'Coline', 'Angel', 'Razelle'];
 const PICKUP_TYPES = ['HOME', 'OFFICE'];
@@ -62,6 +64,40 @@ export default function CleaningApp() {
   const [clientPickerFor, setClientPickerFor] = useState(null);
   const [cleanerHomes, setCleanerHomes] = useState({}); // { Leah: { address, lat, lng }, ... }
   const [officeAddress, setOfficeAddress] = useState({ address: 'Office, Abu Dhabi', lat: 24.4539, lng: 54.3773 });
+  const [companyInfo, setCompanyInfo] = useState({
+    name: 'AR Cleaning Services',
+    address: 'Office 92, M-floor Al Jazeera Bldg, Abu Dhabi City, UAE',
+    phone: '050 332 7215',
+    email: 'arhomeservices.ae@gmail.com',
+    trn: '',
+    bankName: 'AR Cleaning and Maintenance Services',
+    bankBranch: 'ADCB Commercial Bank, Abu Dhabi',
+    accountNo: '13024902820001',
+    iban: 'AE160030013024902820001',
+    swift: 'ADCBAEAA',
+    bankNote: 'Bank transfer: Please send us proof of transfer once it is done.\nCash payment: Kindly give to the assigned cleaner.',
+    invoiceCounter: 3003,
+    logoDataUrl: ''
+  });
+  const [companySettings, setCompanySettings] = useState({
+    name: 'Sparkle Operations',
+    address: 'Abu Dhabi, UAE',
+    phone: '',
+    email: '',
+    trn: '',
+    website: '',
+    bankName: '',
+    bankAccount: '',
+    bankIban: '',
+    logoDataUrl: '', // base64 PNG/JPG
+    invoicePrefix: 'INV',
+    invoiceCounter: 1,
+    vatRate: 5, // % - UAE VAT
+    vatEnabled: false, // default off (most cleaning companies aren't registered)
+    paymentTerms: 'Payment due upon receipt',
+    footerNote: 'Thank you for your business!'
+  });
+  const [invoicePreview, setInvoicePreview] = useState(null);
 
   useEffect(() => {
     try {
@@ -88,6 +124,10 @@ export default function CleaningApp() {
     try {
       const officeRaw = localStorage.getItem('sparkle_office');
       if (officeRaw) setOfficeAddress(JSON.parse(officeRaw));
+    } catch (e) {}
+    try {
+      const companyRaw = localStorage.getItem('sparkle_company');
+      if (companyRaw) setCompanySettings(prev => ({ ...prev, ...JSON.parse(companyRaw) }));
     } catch (e) {}
   }, []);
 
@@ -137,6 +177,258 @@ export default function CleaningApp() {
   const saveOfficeAddress = (next) => {
     setOfficeAddress(next);
     try { localStorage.setItem('sparkle_office', JSON.stringify(next)); } catch (e) {}
+  };
+
+  const saveCompanyInfo = (next) => {
+    setCompanyInfo(next);
+    try { localStorage.setItem('sparkle_company', JSON.stringify(next)); } catch (e) {}
+  };
+
+  const saveCompanySettings = (next) => {
+    setCompanySettings(next);
+    try { localStorage.setItem('sparkle_company', JSON.stringify(next)); } catch (e) {}
+  };
+
+  // ===== INVOICE GENERATION =====
+  // Group bookings by client per day, generate one invoice per group
+  const generateInvoiceForClientDay = (clientName, dateStr) => {
+    const items = allBookingsWithDate.filter(b => b.clientName === clientName && b.date === dateStr);
+    if (items.length === 0) {
+      showStatus('No bookings to invoice');
+      return;
+    }
+    const invoiceNum = `${companySettings.invoicePrefix}-${new Date(dateStr).getFullYear()}-${String(companySettings.invoiceCounter).padStart(4, '0')}`;
+    // Increment counter
+    saveCompanySettings({ ...companySettings, invoiceCounter: companySettings.invoiceCounter + 1 });
+    buildInvoicePDF(invoiceNum, clientName, dateStr, items);
+  };
+
+  const buildInvoicePDF = (invoiceNum, clientName, dateStr, items) => {
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const margin = 15;
+    let y = margin;
+
+    // Colors
+    const greenRGB = [15, 76, 58];
+    const inkRGB = [26, 26, 26];
+    const greyRGB = [120, 120, 120];
+    const creamRGB = [245, 239, 217];
+
+    // === TOP BAR (green banner) ===
+    doc.setFillColor(...greenRGB);
+    doc.rect(0, 0, pageWidth, 8, 'F');
+    y = 16;
+
+    // === HEADER: Logo + Company info | INVOICE big text ===
+    if (companySettings.logoDataUrl) {
+      try {
+        doc.addImage(companySettings.logoDataUrl, 'PNG', margin, y, 28, 28);
+      } catch (e) {
+        // ignore logo errors
+      }
+    }
+
+    // Company info (right of logo)
+    const compX = companySettings.logoDataUrl ? margin + 32 : margin;
+    doc.setTextColor(...greenRGB);
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'bold');
+    doc.text(companySettings.name || 'Company Name', compX, y + 6);
+
+    doc.setTextColor(...inkRGB);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    let compY = y + 11;
+    if (companySettings.address) { doc.text(companySettings.address, compX, compY); compY += 4; }
+    const contactLine = [companySettings.phone, companySettings.email].filter(Boolean).join('  •  ');
+    if (contactLine) { doc.text(contactLine, compX, compY); compY += 4; }
+    if (companySettings.website) { doc.text(companySettings.website, compX, compY); compY += 4; }
+    if (companySettings.trn) { doc.text(`TRN: ${companySettings.trn}`, compX, compY); compY += 4; }
+
+    // INVOICE title (top right)
+    doc.setTextColor(...greenRGB);
+    doc.setFontSize(28);
+    doc.setFont('helvetica', 'bold');
+    doc.text('INVOICE', pageWidth - margin, y + 8, { align: 'right' });
+
+    doc.setTextColor(...inkRGB);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`No: ${invoiceNum}`, pageWidth - margin, y + 15, { align: 'right' });
+    doc.text(`Date: ${new Date(dateStr).toLocaleDateString('en-GB')}`, pageWidth - margin, y + 20, { align: 'right' });
+
+    y = Math.max(compY, y + 28) + 6;
+
+    // Separator line
+    doc.setDrawColor(...greenRGB);
+    doc.setLineWidth(0.6);
+    doc.line(margin, y, pageWidth - margin, y);
+    y += 8;
+
+    // === BILL TO ===
+    const client = clients.find(c => c.name === clientName);
+    const billItem = items[0];
+    doc.setTextColor(...greyRGB);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('BILL TO', margin, y);
+    doc.setTextColor(...inkRGB);
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text(clientName, margin, y + 5);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    let billY = y + 10;
+    const addr = client?.address || billItem?.location || '';
+    if (addr) {
+      const addrLines = doc.splitTextToSize(addr, pageWidth / 2 - margin);
+      doc.text(addrLines, margin, billY);
+      billY += addrLines.length * 4;
+    }
+    const phone = client?.phone || billItem?.phone || '';
+    if (phone) { doc.text(`Phone: ${phone}`, margin, billY); billY += 4; }
+
+    // SERVICE PERIOD (right)
+    doc.setTextColor(...greyRGB);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SERVICE DATE', pageWidth - margin, y, { align: 'right' });
+    doc.setTextColor(...inkRGB);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(new Date(dateStr).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }), pageWidth - margin, y + 5, { align: 'right' });
+
+    // Payment status badge (right)
+    const allPaid = items.every(it => it.paymentStatus === 'PAID');
+    const allPending = items.every(it => it.paymentStatus !== 'PAID');
+    const status = allPaid ? 'PAID' : allPending ? 'UNPAID' : 'PARTIALLY PAID';
+    const statusColor = allPaid ? [15, 76, 58] : allPending ? [184, 71, 42] : [217, 119, 6];
+    doc.setFillColor(...statusColor);
+    doc.roundedRect(pageWidth - margin - 32, y + 9, 32, 9, 1.5, 1.5, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.text(status, pageWidth - margin - 16, y + 15.5, { align: 'center' });
+
+    y = Math.max(billY, y + 22) + 6;
+
+    // === ITEMS TABLE ===
+    const tableData = items.map(it => [
+      it.timing || '',
+      it.cleaner || '',
+      `Cleaning service${it.withMaterials ? ' (with materials)' : ''}`,
+      Number(it.hours || 0).toFixed(1),
+      `${Number(it.pricePerHour || 0).toFixed(2)}`,
+      `${Number(it.total || 0).toFixed(2)}`
+    ]);
+
+    doc.autoTable({
+      startY: y,
+      head: [['TIME', 'CLEANER', 'DESCRIPTION', 'HOURS', 'RATE (AED)', 'AMOUNT (AED)']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: {
+        fillColor: greenRGB,
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: 9,
+        halign: 'center'
+      },
+      bodyStyles: {
+        fontSize: 9,
+        textColor: inkRGB,
+        cellPadding: 3
+      },
+      alternateRowStyles: { fillColor: [250, 248, 243] },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 20 },
+        1: { halign: 'left', cellWidth: 25 },
+        2: { halign: 'left' },
+        3: { halign: 'center', cellWidth: 16 },
+        4: { halign: 'right', cellWidth: 24 },
+        5: { halign: 'right', cellWidth: 28, fontStyle: 'bold' }
+      },
+      margin: { left: margin, right: margin }
+    });
+
+    y = doc.lastAutoTable.finalY + 6;
+
+    // === TOTALS ===
+    const subtotal = items.reduce((s, it) => s + (it.total || 0), 0);
+    const vatAmount = companySettings.vatEnabled ? subtotal * (companySettings.vatRate / 100) : 0;
+    const total = subtotal + vatAmount;
+
+    const totalsX = pageWidth - margin - 70;
+    const totalsBoxW = 70;
+    let tY = y;
+
+    const totalsLine = (label, val, bold = false, big = false) => {
+      doc.setFont('helvetica', bold ? 'bold' : 'normal');
+      doc.setFontSize(big ? 12 : 10);
+      doc.setTextColor(...(bold ? greenRGB : inkRGB));
+      doc.text(label, totalsX, tY);
+      doc.text(`AED ${val.toFixed(2)}`, totalsX + totalsBoxW - 2, tY, { align: 'right' });
+      tY += big ? 8 : 6;
+    };
+
+    totalsLine('Subtotal', subtotal);
+    if (companySettings.vatEnabled) {
+      totalsLine(`VAT (${companySettings.vatRate}%)`, vatAmount);
+    }
+    // Big total line with green background
+    doc.setFillColor(...greenRGB);
+    doc.rect(totalsX - 2, tY - 5, totalsBoxW + 2, 9, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.text('TOTAL', totalsX, tY);
+    doc.text(`AED ${total.toFixed(2)}`, totalsX + totalsBoxW - 2, tY, { align: 'right' });
+    tY += 12;
+
+    // === PAYMENT INFO ===
+    y = tY + 4;
+    if (companySettings.bankName || companySettings.bankAccount || companySettings.bankIban) {
+      doc.setDrawColor(220, 220, 220);
+      doc.setLineWidth(0.3);
+      doc.line(margin, y, pageWidth - margin, y);
+      y += 6;
+      doc.setTextColor(...greyRGB);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.text('PAYMENT INFORMATION', margin, y);
+      y += 5;
+      doc.setTextColor(...inkRGB);
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      if (companySettings.bankName) { doc.text(`Bank: ${companySettings.bankName}`, margin, y); y += 4; }
+      if (companySettings.bankAccount) { doc.text(`Account: ${companySettings.bankAccount}`, margin, y); y += 4; }
+      if (companySettings.bankIban) { doc.text(`IBAN: ${companySettings.bankIban}`, margin, y); y += 4; }
+    }
+
+    // === FOOTER ===
+    const footerY = doc.internal.pageSize.getHeight() - 18;
+    doc.setDrawColor(...greenRGB);
+    doc.setLineWidth(0.4);
+    doc.line(margin, footerY, pageWidth - margin, footerY);
+    doc.setTextColor(...greyRGB);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'italic');
+    if (companySettings.paymentTerms) {
+      doc.text(companySettings.paymentTerms, margin, footerY + 5);
+    }
+    if (companySettings.footerNote) {
+      doc.text(companySettings.footerNote, pageWidth / 2, footerY + 11, { align: 'center' });
+    }
+
+    // === BOTTOM GREEN BAR ===
+    doc.setFillColor(...greenRGB);
+    doc.rect(0, doc.internal.pageSize.getHeight() - 4, pageWidth, 4, 'F');
+
+    // Save
+    const safeClientName = clientName.replace(/[^a-zA-Z0-9]/g, '_');
+    doc.save(`invoice_${invoiceNum}_${safeClientName}.pdf`);
+    showStatus(`✓ Invoice ${invoiceNum} downloaded`);
   };
 
   const generateFromContracts = () => {
@@ -841,6 +1133,10 @@ export default function CleaningApp() {
           <button className={`tab ${view === 'pending' ? 'active' : ''}`} onClick={() => setView('pending')}><AlertCircle size={15} /> Pending</button>
           <button className={`tab ${view === 'monthly' ? 'active' : ''}`} onClick={() => setView('monthly')}><CalendarDays size={15} /> Monthly Report</button>
           <button className={`tab ${view === 'driver' ? 'active' : ''}`} onClick={() => setView('driver')}><Truck size={15} /> Driver</button>
+          <button className={`tab ${view === 'invoices' ? 'active' : ''}`} onClick={() => setView('invoices')}><Receipt size={15} /> Invoices</button>
+          <button className={`tab ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Settings size={15} /> Settings</button>
+          <button className={`tab ${view === 'invoices' ? 'active' : ''}`} onClick={() => setView('invoices')}><Receipt size={15} /> Invoices</button>
+          <button className={`tab ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><SettingsIcon size={15} /> Settings</button>
         </div>
       </div>
 
@@ -854,6 +1150,10 @@ export default function CleaningApp() {
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} />}
         {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={CLEANERS} updateBooking={updateBooking} />}
+        {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
+        {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
+        {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} colors={colors} generateInvoiceForClientDay={generateInvoiceForClientDay} companySettings={companySettings} />}
+        {view === 'settings' && <SettingsView companySettings={companySettings} saveCompanySettings={saveCompanySettings} colors={colors} />}
       </div>
 
       {clientPickerFor && <ClientPickerModal clients={clients} onPick={(c) => applyClientToBooking(clientPickerFor, c)} onClose={() => setClientPickerFor(null)} colors={colors} />}
@@ -1502,6 +1802,282 @@ function ReportView({ bookingsWithCalc, date, formatDate, colors, totalRevenue, 
         </div>
         {bookingsWithCalc.length === 0 && <div style={{ textAlign: 'center', padding: '40px', color: colors.ink + '66' }}>No bookings yet.</div>}
       </div>
+    </div>
+  );
+}
+
+function SettingsView({ companySettings, saveCompanySettings, colors }) {
+  const [s, setS] = React.useState(companySettings);
+  const [logoPreview, setLogoPreview] = React.useState(companySettings.logoDataUrl || '');
+  const [savedMsg, setSavedMsg] = React.useState('');
+  const fileInputRef = React.useRef(null);
+
+  const handleLogoUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 500000) {
+      alert('Logo file too large. Please use an image under 500 KB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      setLogoPreview(dataUrl);
+      setS({ ...s, logoDataUrl: dataUrl });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeLogo = () => {
+    setLogoPreview('');
+    setS({ ...s, logoDataUrl: '' });
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const save = () => {
+    saveCompanySettings(s);
+    setSavedMsg('✓ Saved');
+    setTimeout(() => setSavedMsg(''), 2000);
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Company Settings</h2>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Used on invoices and reports</p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {savedMsg && <span style={{ color: colors.accent, fontWeight: 600, fontSize: '13px' }}>{savedMsg}</span>}
+          <button className="btn btn-primary" onClick={save}><Save size={14} /> Save Settings</button>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }} className="settings-grid">
+        <style>{`@media (max-width: 800px) { .settings-grid { grid-template-columns: 1fr !important; } }`}</style>
+
+        {/* COMPANY INFO */}
+        <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Building2 size={18} /> Company Information
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <Field label="Company Name *">
+              <input className="input" value={s.name} onChange={e => setS({ ...s, name: e.target.value })} />
+            </Field>
+            <Field label="Address">
+              <textarea className="input" rows="2" value={s.address} onChange={e => setS({ ...s, address: e.target.value })} style={{ resize: 'vertical' }} />
+            </Field>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <Field label="Phone">
+                <input className="input" value={s.phone} onChange={e => setS({ ...s, phone: e.target.value })} placeholder="+971 50 ..." />
+              </Field>
+              <Field label="Email">
+                <input className="input" value={s.email} onChange={e => setS({ ...s, email: e.target.value })} placeholder="contact@..." />
+              </Field>
+            </div>
+            <Field label="Website (optional)">
+              <input className="input" value={s.website} onChange={e => setS({ ...s, website: e.target.value })} placeholder="www..." />
+            </Field>
+            <Field label="TRN (Tax Registration Number)">
+              <input className="input" value={s.trn} onChange={e => setS({ ...s, trn: e.target.value })} placeholder="100123456700003" />
+            </Field>
+          </div>
+        </div>
+
+        {/* LOGO + VAT */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px' }}>
+            <h3 className="display-font" style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700 }}>Company Logo</h3>
+            {logoPreview ? (
+              <div style={{ textAlign: 'center', padding: '14px', border: `1px dashed ${colors.border}`, borderRadius: '8px', background: colors.bg }}>
+                <img src={logoPreview} alt="Logo" style={{ maxWidth: '160px', maxHeight: '120px', objectFit: 'contain' }} />
+                <div style={{ marginTop: '10px', display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                  <button className="btn btn-sm" onClick={() => fileInputRef.current?.click()}>Change</button>
+                  <button className="btn btn-danger btn-sm" onClick={removeLogo}>Remove</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '24px', border: `2px dashed ${colors.border}`, borderRadius: '8px', cursor: 'pointer' }} onClick={() => fileInputRef.current?.click()}>
+                <Plus size={28} style={{ color: colors.ink + '66', marginBottom: '6px' }} />
+                <div style={{ fontSize: '13px', color: colors.ink + '99' }}>Click to upload logo (PNG/JPG, max 500 KB)</div>
+              </div>
+            )}
+            <input ref={fileInputRef} type="file" accept="image/*" onChange={handleLogoUpload} style={{ display: 'none' }} />
+          </div>
+
+          <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px' }}>
+            <h3 className="display-font" style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Hash size={18} /> Invoicing
+            </h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <Field label="Invoice Prefix">
+                  <input className="input" value={s.invoicePrefix} onChange={e => setS({ ...s, invoicePrefix: e.target.value })} placeholder="INV" />
+                </Field>
+                <Field label="Next Invoice #">
+                  <input className="input" type="number" value={s.invoiceCounter} onChange={e => setS({ ...s, invoiceCounter: parseInt(e.target.value) || 1 })} />
+                </Field>
+              </div>
+              <Field label="">
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', padding: '6px 0' }}>
+                  <input type="checkbox" checked={s.vatEnabled} onChange={e => setS({ ...s, vatEnabled: e.target.checked })} style={{ transform: 'scale(1.2)' }} />
+                  Apply VAT to invoices (UAE standard 5%)
+                </label>
+              </Field>
+              {s.vatEnabled && (
+                <Field label="VAT Rate (%)">
+                  <input className="input" type="number" value={s.vatRate} onChange={e => setS({ ...s, vatRate: parseFloat(e.target.value) || 0 })} />
+                </Field>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* BANK DETAILS */}
+        <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <DollarSign size={18} /> Bank Details (for online payments on invoice)
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <Field label="Bank Name">
+              <input className="input" value={s.bankName} onChange={e => setS({ ...s, bankName: e.target.value })} placeholder="ADCB / Emirates NBD..." />
+            </Field>
+            <Field label="Account Number">
+              <input className="input" value={s.bankAccount} onChange={e => setS({ ...s, bankAccount: e.target.value })} />
+            </Field>
+            <Field label="IBAN">
+              <input className="input" value={s.bankIban} onChange={e => setS({ ...s, bankIban: e.target.value })} placeholder="AE07 ..." />
+            </Field>
+          </div>
+        </div>
+
+        {/* MESSAGES */}
+        <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700 }}>Invoice Footer Text</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <Field label="Payment Terms">
+              <input className="input" value={s.paymentTerms} onChange={e => setS({ ...s, paymentTerms: e.target.value })} placeholder="Payment due upon receipt" />
+            </Field>
+            <Field label="Thank-you Note">
+              <input className="input" value={s.footerNote} onChange={e => setS({ ...s, footerNote: e.target.value })} placeholder="Thank you for your business!" />
+            </Field>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InvoicesView({ allBookings, colors, generateInvoiceForClientDay, companySettings }) {
+  const [search, setSearch] = React.useState('');
+  const [filterStatus, setFilterStatus] = React.useState('ALL');
+
+  // Group all bookings by client + date
+  const groups = {};
+  allBookings.forEach(b => {
+    if (!b.clientName || !b.date) return;
+    const key = `${b.clientName}__${b.date}`;
+    if (!groups[key]) {
+      groups[key] = {
+        key, clientName: b.clientName, date: b.date, items: [],
+        total: 0, allPaid: true, anyPaid: false, phone: b.phone || '', location: b.location || ''
+      };
+    }
+    groups[key].items.push(b);
+    groups[key].total += (b.total || 0);
+    if (b.paymentStatus !== 'PAID') groups[key].allPaid = false;
+    if (b.paymentStatus === 'PAID') groups[key].anyPaid = true;
+  });
+  const list = Object.values(groups)
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .filter(g => {
+      if (search) {
+        const q = search.toLowerCase();
+        if (!g.clientName.toLowerCase().includes(q) && !g.location.toLowerCase().includes(q)) return false;
+      }
+      if (filterStatus === 'PAID' && !g.allPaid) return false;
+      if (filterStatus === 'UNPAID' && g.allPaid) return false;
+      return true;
+    });
+
+  const formatD = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Invoices</h2>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Generate per-client-per-day invoices · {list.length} ready</p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative' }}>
+            <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: colors.ink + '66' }} />
+            <input className="input" placeholder="Search client..." value={search} onChange={e => setSearch(e.target.value)} style={{ paddingLeft: '32px', width: '180px' }} />
+          </div>
+          <select className="select" value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ width: 'auto' }}>
+            <option value="ALL">All</option>
+            <option value="PAID">Paid only</option>
+            <option value="UNPAID">Unpaid only</option>
+          </select>
+        </div>
+      </div>
+
+      {!companySettings.name || companySettings.name === 'Sparkle Operations' ? (
+        <div style={{ background: '#FEF3C7', border: `1.5px solid ${colors.warning}`, borderRadius: '10px', padding: '14px 18px', marginBottom: '16px', fontSize: '13px', color: colors.ink }}>
+          ⚠️ <strong>Tip:</strong> Set up your company name, logo, and details in the <strong>Settings</strong> tab first — they will appear on every invoice.
+        </div>
+      ) : null}
+
+      {list.length === 0 ? (
+        <div style={{ background: 'white', borderRadius: '12px', border: `1px dashed ${colors.border}`, padding: '60px 20px', textAlign: 'center', color: colors.ink + '99' }}>
+          <Receipt size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
+          <h3 style={{ margin: '0 0 8px' }}>No invoices to generate</h3>
+          <p style={{ fontSize: '13px', margin: 0 }}>Add bookings on the Bookings tab and save the day. Each client/day combination becomes one invoice.</p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {list.map(g => (
+            <div key={g.key} style={{
+              background: 'white',
+              border: `1px solid ${colors.border}`,
+              borderRadius: '10px',
+              padding: '14px 18px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: '12px',
+              flexWrap: 'wrap'
+            }}>
+              <div style={{ flex: 1, minWidth: '220px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px', flexWrap: 'wrap' }}>
+                  <div className="display-font" style={{ fontSize: '17px', fontWeight: 700 }}>{g.clientName}</div>
+                  <span className="badge" style={{
+                    background: g.allPaid ? colors.accentLight : '#FEE2E2',
+                    color: g.allPaid ? colors.accent : colors.rust
+                  }}>
+                    {g.allPaid ? 'PAID' : g.anyPaid ? 'PARTIALLY PAID' : 'UNPAID'}
+                  </span>
+                </div>
+                <div style={{ fontSize: '12px', color: colors.ink + 'AA', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                  <span>📅 {formatD(g.date)}</span>
+                  <span>{g.items.length} job{g.items.length > 1 ? 's' : ''}</span>
+                  {g.location && <span>📍 {g.location}</span>}
+                  {g.phone && <span>📞 {g.phone}</span>}
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                <div className="display-font" style={{ fontSize: '20px', fontWeight: 700, color: colors.accent }}>
+                  {g.total.toFixed(2)} AED
+                </div>
+                <button className="btn btn-primary" onClick={() => generateInvoiceForClientDay(g.clientName, g.date)}>
+                  <Receipt size={14} /> Generate Invoice
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2189,6 +2765,490 @@ function MonthlyView({ allBookings, CLEANERS, colors, exportMonthlyExcel }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colors }) {
+  const [mode, setMode] = React.useState('monthly'); // monthly, daily, booking
+  const [selectedClient, setSelectedClient] = React.useState('');
+  const now = new Date();
+  const [year, setYear] = React.useState(now.getFullYear());
+  const [month, setMonth] = React.useState(now.getMonth());
+  const [selectedDate, setSelectedDate] = React.useState(now.toISOString().split('T')[0]);
+  const [selectedBooking, setSelectedBooking] = React.useState('');
+  const [showPreview, setShowPreview] = React.useState(false);
+  const [invoiceNotes, setInvoiceNotes] = React.useState('');
+
+  // Get unique clients who have bookings
+  const clientsWithBookings = React.useMemo(() => {
+    const map = {};
+    allBookings.forEach(b => {
+      const key = b.clientName || 'Unknown';
+      if (!map[key]) {
+        const matched = clients.find(c => c.id === b.clientId) || {};
+        map[key] = { name: key, address: b.location || matched.address || '', phone: b.phone || matched.phone || '', clientId: b.clientId };
+      }
+    });
+    return Object.values(map).sort((a, b) => a.name.localeCompare(b.name));
+  }, [allBookings, clients]);
+
+  // Filter bookings based on mode
+  const invoiceItems = React.useMemo(() => {
+    if (!selectedClient) return [];
+    if (mode === 'monthly') {
+      const monthStart = new Date(year, month, 1);
+      const monthEnd = new Date(year, month + 1, 0);
+      return allBookings.filter(b => {
+        if (b.clientName !== selectedClient) return false;
+        const d = new Date(b.date);
+        return d >= monthStart && d <= monthEnd;
+      }).sort((a, b) => a.date.localeCompare(b.date));
+    }
+    if (mode === 'daily') {
+      return allBookings.filter(b => b.clientName === selectedClient && b.date === selectedDate);
+    }
+    if (mode === 'booking') {
+      return allBookings.filter(b => b.id == selectedBooking);
+    }
+    return [];
+  }, [mode, selectedClient, year, month, selectedDate, selectedBooking, allBookings]);
+
+  const subtotal = invoiceItems.reduce((s, b) => s + (b.total || 0), 0);
+  const totalHours = invoiceItems.reduce((s, b) => s + (b.hours || 0), 0);
+
+  // Months
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const yearOptions = [];
+  for (let y = now.getFullYear() - 2; y <= now.getFullYear() + 1; y++) yearOptions.push(y);
+
+  const clientBookings = selectedClient ? allBookings.filter(b => b.clientName === selectedClient).sort((a, b) => b.date.localeCompare(a.date)) : [];
+
+  const generateInvoice = () => {
+    if (invoiceItems.length === 0) { alert('No bookings to invoice. Pick a client with bookings.'); return; }
+    setShowPreview(true);
+  };
+
+  const periodLabel = mode === 'monthly' ? `${months[month]} ${year}` : mode === 'daily' ? new Date(selectedDate).toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Single Booking';
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Invoices</h2>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Generate professional invoices · download PDF · share via WhatsApp</p>
+        </div>
+        <div style={{ fontSize: '12px', color: colors.ink + 'AA', textAlign: 'right' }}>
+          Next invoice #: <span className="mono" style={{ fontWeight: 700, color: colors.accent }}>{companyInfo.invoiceCounter}</span>
+        </div>
+      </div>
+
+      <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px', marginBottom: '20px' }}>
+        <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>1. Choose invoice type</h3>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
+          <button className={`btn ${mode === 'monthly' ? 'btn-primary' : ''}`} onClick={() => setMode('monthly')}>
+            <CalendarDays size={14} /> Monthly Invoice
+          </button>
+          <button className={`btn ${mode === 'daily' ? 'btn-primary' : ''}`} onClick={() => setMode('daily')}>
+            <FileText size={14} /> Per-Day Invoice
+          </button>
+          <button className={`btn ${mode === 'booking' ? 'btn-primary' : ''}`} onClick={() => setMode('booking')}>
+            <Receipt size={14} /> Single Booking Invoice
+          </button>
+        </div>
+
+        <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>2. Pick the client</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: clientsWithBookings.length > 6 ? 'repeat(auto-fill, minmax(180px, 1fr))' : '1fr', gap: '8px', marginBottom: '20px' }}>
+          {clientsWithBookings.length === 0 ? (
+            <div style={{ padding: '20px', textAlign: 'center', color: colors.ink + '66', fontSize: '13px' }}>
+              No clients yet. Add bookings on the Bookings tab first.
+            </div>
+          ) : (
+            <select className="select" value={selectedClient} onChange={e => setSelectedClient(e.target.value)} style={{ gridColumn: '1 / -1' }}>
+              <option value="">— Pick a client —</option>
+              {clientsWithBookings.map(c => <option key={c.name} value={c.name}>{c.name}{c.address ? ` · ${c.address}` : ''}</option>)}
+            </select>
+          )}
+        </div>
+
+        {selectedClient && mode === 'monthly' && (
+          <>
+            <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>3. Pick the month</h3>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+              <select className="select" value={month} onChange={e => setMonth(parseInt(e.target.value))} style={{ width: 'auto' }}>
+                {months.map((m, i) => <option key={i} value={i}>{m}</option>)}
+              </select>
+              <select className="select" value={year} onChange={e => setYear(parseInt(e.target.value))} style={{ width: 'auto' }}>
+                {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+          </>
+        )}
+
+        {selectedClient && mode === 'daily' && (
+          <>
+            <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>3. Pick the date</h3>
+            <input type="date" className="input" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} style={{ width: 'auto', marginBottom: '20px' }} />
+          </>
+        )}
+
+        {selectedClient && mode === 'booking' && (
+          <>
+            <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>3. Pick the booking</h3>
+            <select className="select" value={selectedBooking} onChange={e => setSelectedBooking(e.target.value)} style={{ marginBottom: '20px' }}>
+              <option value="">— Pick a booking —</option>
+              {clientBookings.map(b => (
+                <option key={b.id} value={b.id}>{b.date} · {b.timing} · {b.cleaner} · {(b.total || 0).toFixed(2)} AED</option>
+              ))}
+            </select>
+          </>
+        )}
+
+        {selectedClient && (
+          <>
+            <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>4. Optional notes</h3>
+            <textarea className="input" rows="2" placeholder="e.g. Thank you for your continued business" value={invoiceNotes} onChange={e => setInvoiceNotes(e.target.value)} style={{ resize: 'vertical', marginBottom: '20px' }} />
+
+            {invoiceItems.length > 0 && (
+              <div style={{ background: colors.accentLight, border: `1.5px solid ${colors.accent}`, padding: '14px 18px', borderRadius: '10px', marginBottom: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '12px', color: colors.ink + 'AA', marginBottom: '2px' }}>Preview · {periodLabel}</div>
+                    <div className="display-font" style={{ fontSize: '18px', fontWeight: 700 }}>{invoiceItems.length} job{invoiceItems.length > 1 ? 's' : ''} · {totalHours.toFixed(1)} hrs · <span style={{ color: colors.accent }}>{subtotal.toFixed(2)} AED</span></div>
+                  </div>
+                  <button className="btn btn-primary" onClick={generateInvoice}>
+                    <Receipt size={14} /> Generate Invoice
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {selectedClient && invoiceItems.length === 0 && (
+              <div style={{ padding: '20px', textAlign: 'center', color: colors.ink + '66', fontSize: '13px', background: colors.soft, borderRadius: '8px' }}>
+                No bookings found for this client in the selected period.
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {showPreview && (
+        <InvoicePreviewModal
+          items={invoiceItems}
+          client={clientsWithBookings.find(c => c.name === selectedClient)}
+          companyInfo={companyInfo}
+          saveCompanyInfo={saveCompanyInfo}
+          periodLabel={periodLabel}
+          mode={mode}
+          notes={invoiceNotes}
+          colors={colors}
+          onClose={() => setShowPreview(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function InvoicePreviewModal({ items, client, companyInfo, saveCompanyInfo, periodLabel, mode, notes, colors, onClose }) {
+  const [invoiceNumber] = React.useState(companyInfo.invoiceCounter);
+  const [committed, setCommitted] = React.useState(false);
+  const printRef = React.useRef(null);
+
+  React.useEffect(() => {
+    // Increment invoice counter once when modal opens
+    if (!committed) {
+      saveCompanyInfo({ ...companyInfo, invoiceCounter: companyInfo.invoiceCounter + 1 });
+      setCommitted(true);
+    }
+  }, []);
+
+  const subtotal = items.reduce((s, b) => s + (b.total || 0), 0);
+  const totalHours = items.reduce((s, b) => s + (b.hours || 0), 0);
+  const today = new Date();
+  const issueDate = today.toLocaleDateString('en-GB'); // dd/mm/yyyy
+  const isPaid = items.every(b => b.paymentStatus === 'PAID');
+
+  const titleByMode = {
+    monthly: `MONTHLY SERVICE FOR ${periodLabel.toUpperCase()}`,
+    daily: `CLEANING SERVICE - ${periodLabel.toUpperCase()}`,
+    booking: 'CLEANING SERVICE'
+  };
+
+  const handlePrint = () => {
+    const printContent = printRef.current.innerHTML;
+    const win = window.open('', '_blank', 'width=900,height=1000');
+    win.document.write(`
+      <!DOCTYPE html><html><head><title>Invoice ${invoiceNumber}</title>
+      <style>
+        @page { size: A4; margin: 15mm; }
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; color: #1A1A1A; }
+        * { box-sizing: border-box; }
+      </style>
+      </head><body>${printContent}<script>window.onload=()=>{window.print();window.onafterprint=()=>window.close();}</script></body></html>
+    `);
+    win.document.close();
+  };
+
+  const handleWhatsApp = () => {
+    const msg = `Hi ${client?.name || 'Customer'},\n\nHere is your invoice from ${companyInfo.name}:\n\nInvoice #: ${invoiceNumber}\nDate: ${issueDate}\nPeriod: ${periodLabel}\nTotal Hours: ${totalHours}\nAmount: AED ${subtotal.toFixed(2)}\n\n${isPaid ? 'Status: PAID ✓' : 'Please find payment details below.'}\n\nThank you for your business!\n\n${companyInfo.name}\n${companyInfo.phone}`;
+    const phone = (client?.phone || '').replace(/[^0-9]/g, '');
+    const url = phone ? `https://wa.me/${phone}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+    window.open(url, '_blank');
+  };
+
+  // Build line items - one row per booking
+  const lineItems = items.map(b => ({
+    description: titleByMode[mode],
+    date: new Date(b.date).getDate(),
+    hours: b.hours,
+    rate: b.pricePerHour,
+    materials: b.withMaterials ? 'Yes' : '',
+    cleaner: b.cleaner,
+    amount: b.total
+  }));
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '900px', maxHeight: '95vh' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <h3 className="display-font" style={{ margin: 0, fontSize: '20px', fontWeight: 700 }}>Invoice Preview</h3>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="btn btn-primary" onClick={handlePrint}><Printer size={14} /> Print / Save PDF</button>
+            <button className="btn" style={{ background: '#25D366', color: 'white', borderColor: '#25D366' }} onClick={handleWhatsApp}><MessageCircle size={14} /> WhatsApp</button>
+            <button className="btn btn-sm" onClick={onClose} style={{ padding: '6px' }}><X size={14} /></button>
+          </div>
+        </div>
+
+        <div ref={printRef}>
+          <InvoiceContent
+            invoiceNumber={invoiceNumber}
+            issueDate={issueDate}
+            client={client}
+            companyInfo={companyInfo}
+            lineItems={lineItems}
+            subtotal={subtotal}
+            totalHours={totalHours}
+            isPaid={isPaid}
+            notes={notes}
+            mode={mode}
+            periodLabel={periodLabel}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineItems, subtotal, totalHours, isPaid, notes, mode, periodLabel }) {
+  const accent = '#0F4C3A';
+  const paidColor = '#0F4C3A';
+
+  return (
+    <div style={{ background: 'white', padding: '32px', border: '1px solid #e5e5e5', borderRadius: '8px', position: 'relative', fontFamily: 'Arial, sans-serif', color: '#1A1A1A', fontSize: '13px' }}>
+      {isPaid && (
+        <div style={{
+          position: 'absolute', top: '120px', right: '40px',
+          border: `4px solid ${paidColor}`, color: paidColor,
+          padding: '6px 24px', fontSize: '32px', fontWeight: 800,
+          letterSpacing: '0.1em', transform: 'rotate(-12deg)',
+          opacity: 0.85, fontFamily: 'Arial, sans-serif'
+        }}>
+          PAID
+        </div>
+      )}
+
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', borderBottom: `3px solid ${accent}`, paddingBottom: '14px' }}>
+        <div style={{ flex: 1 }}>
+          <h1 style={{ margin: 0, fontSize: '36px', fontWeight: 800, color: accent, letterSpacing: '-0.02em' }}>INVOICE</h1>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          {companyInfo.logoDataUrl && <img src={companyInfo.logoDataUrl} alt="logo" style={{ maxHeight: '60px', marginBottom: '8px' }} />}
+          <div style={{ fontWeight: 700, fontSize: '15px', color: accent, marginBottom: '2px' }}>{companyInfo.name}</div>
+          <div style={{ fontSize: '11px', color: '#666', maxWidth: '260px', lineHeight: 1.5 }}>{companyInfo.address}</div>
+          <div style={{ fontSize: '11px', color: '#666' }}>📞 {companyInfo.phone}</div>
+          <div style={{ fontSize: '11px', color: '#666' }}>✉️ {companyInfo.email}</div>
+          {companyInfo.trn && <div style={{ fontSize: '11px', color: '#666' }}>TRN: {companyInfo.trn}</div>}
+        </div>
+      </div>
+
+      {/* Bill To + Date/Number */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', gap: '20px' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '11px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700, marginBottom: '4px' }}>Bill To:</div>
+          <div style={{ fontWeight: 700, fontSize: '16px', marginBottom: '2px' }}>{client?.name}</div>
+          <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.5 }}>{client?.address}</div>
+          {client?.phone && <div style={{ fontSize: '12px', color: '#555' }}>📞 {client.phone}</div>}
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ marginBottom: '6px' }}>
+            <span style={{ fontSize: '11px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Date: </span>
+            <span style={{ fontWeight: 700, fontSize: '13px' }}>{issueDate}</span>
+          </div>
+          <div>
+            <span style={{ fontSize: '11px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Invoice #: </span>
+            <span style={{ fontWeight: 700, fontSize: '15px', color: accent }}>{invoiceNumber}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Line Items Table */}
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '16px', fontSize: '12px' }}>
+        <thead>
+          <tr style={{ background: accent, color: 'white' }}>
+            <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Description</th>
+            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '70px' }}>Job Date</th>
+            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '60px' }}>Hours</th>
+            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '70px' }}>Rate / hr</th>
+            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '70px' }}>Materials</th>
+            <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '90px' }}>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lineItems.map((item, idx) => (
+            <tr key={idx} style={{ background: idx % 2 === 0 ? '#FAFAFA' : 'white', borderBottom: '1px solid #e5e5e5' }}>
+              <td style={{ padding: '8px', verticalAlign: 'top' }}>
+                {idx === 0 ? <span style={{ fontWeight: 600 }}>{item.description}</span> : ''}
+              </td>
+              <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>{item.date}</td>
+              <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>{item.hours}</td>
+              <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>{item.rate}</td>
+              <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>{item.materials}</td>
+              <td style={{ padding: '8px', textAlign: 'right', verticalAlign: 'top', fontWeight: 600 }}>{item.amount.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr style={{ background: '#F0EBE0' }}>
+            <td style={{ padding: '8px', fontWeight: 700 }}>Total hours</td>
+            <td style={{ padding: '8px', textAlign: 'center', fontWeight: 700 }}></td>
+            <td style={{ padding: '8px', textAlign: 'center', fontWeight: 700 }}>{totalHours.toFixed(1)}</td>
+            <td colSpan="2" style={{ padding: '8px', textAlign: 'right', fontWeight: 700 }}>Total</td>
+            <td style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 800, fontSize: '15px', color: accent, borderTop: `2px solid ${accent}` }}>
+              AED {subtotal.toFixed(2)}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+
+      {/* Notes from user */}
+      {notes && (
+        <div style={{ background: '#FFF8E7', padding: '10px 14px', borderRadius: '6px', marginBottom: '14px', fontSize: '12px', color: '#555', borderLeft: `3px solid ${accent}` }}>
+          {notes}
+        </div>
+      )}
+
+      {/* Thank you */}
+      <div style={{ textAlign: 'center', padding: '14px', fontWeight: 700, fontSize: '15px', color: accent, letterSpacing: '0.05em', marginBottom: '14px' }}>
+        THANK YOU FOR YOUR BUSINESS!
+      </div>
+
+      {/* Bank details */}
+      <div style={{ background: '#F0EBE0', padding: '14px', borderRadius: '6px', fontSize: '11px', lineHeight: 1.6 }}>
+        <div style={{ fontWeight: 700, color: accent, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>Bank Details</div>
+        <div><strong>{companyInfo.bankName}</strong></div>
+        <div>{companyInfo.bankBranch}</div>
+        <div>Account No: <span className="mono">{companyInfo.accountNo}</span></div>
+        <div>IBAN: <span className="mono">{companyInfo.iban}</span></div>
+        <div>SWIFT: <span className="mono">{companyInfo.swift}</span></div>
+        {companyInfo.bankNote && (
+          <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #d4cfc0', fontSize: '10px', color: '#666', whiteSpace: 'pre-line' }}>
+            <strong>Note:</strong> {companyInfo.bankNote}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SettingsView({ companyInfo, saveCompanyInfo, colors }) {
+  const [info, setInfo] = React.useState(companyInfo);
+  const [savedMsg, setSavedMsg] = React.useState('');
+
+  React.useEffect(() => { setInfo(companyInfo); }, [companyInfo]);
+
+  const update = (field, value) => setInfo({ ...info, [field]: value });
+
+  const handleLogoUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 200 * 1024) {
+      alert('Logo too large. Max 200 KB please.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => update('logoDataUrl', ev.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  const save = () => {
+    saveCompanyInfo(info);
+    setSavedMsg('✓ Settings saved');
+    setTimeout(() => setSavedMsg(''), 2500);
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Settings</h2>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Your company info appears on every invoice</p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {savedMsg && <span style={{ color: colors.accent, fontWeight: 600, fontSize: '13px' }}>{savedMsg}</span>}
+          <button className="btn btn-primary" onClick={save}><Save size={14} /> Save Settings</button>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '16px' }}>
+        <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>Company Information</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <Field label="Company Name *"><input className="input" value={info.name} onChange={e => update('name', e.target.value)} /></Field>
+            <Field label="Address"><textarea className="input" rows="2" value={info.address} onChange={e => update('address', e.target.value)} style={{ resize: 'vertical' }} /></Field>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <Field label="Phone"><input className="input" value={info.phone} onChange={e => update('phone', e.target.value)} /></Field>
+              <Field label="TRN (optional)"><input className="input" value={info.trn} onChange={e => update('trn', e.target.value)} /></Field>
+            </div>
+            <Field label="Email"><input className="input" value={info.email} onChange={e => update('email', e.target.value)} /></Field>
+            <Field label="Logo (optional, max 200 KB)">
+              <input type="file" accept="image/*" onChange={handleLogoUpload} style={{ fontSize: '12px' }} />
+              {info.logoDataUrl && (
+                <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <img src={info.logoDataUrl} alt="logo" style={{ maxHeight: '50px', border: `1px solid ${colors.border}`, padding: '4px', borderRadius: '4px', background: 'white' }} />
+                  <button className="btn btn-danger btn-sm" onClick={() => update('logoDataUrl', '')}><Trash2 size={12} /> Remove</button>
+                </div>
+              )}
+            </Field>
+          </div>
+        </div>
+
+        <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>Bank Details</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <Field label="Bank Account Holder"><input className="input" value={info.bankName} onChange={e => update('bankName', e.target.value)} /></Field>
+            <Field label="Bank Name & Branch"><input className="input" value={info.bankBranch} onChange={e => update('bankBranch', e.target.value)} /></Field>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <Field label="Account No."><input className="input" value={info.accountNo} onChange={e => update('accountNo', e.target.value)} /></Field>
+              <Field label="SWIFT Code"><input className="input" value={info.swift} onChange={e => update('swift', e.target.value)} /></Field>
+            </div>
+            <Field label="IBAN"><input className="input" value={info.iban} onChange={e => update('iban', e.target.value)} /></Field>
+            <Field label="Payment Notes (shown on invoice)">
+              <textarea className="input" rows="3" value={info.bankNote} onChange={e => update('bankNote', e.target.value)} style={{ resize: 'vertical' }} />
+            </Field>
+          </div>
+        </div>
+
+        <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>Invoice Numbering</h3>
+          <Field label="Next invoice number">
+            <input className="input" type="number" value={info.invoiceCounter} onChange={e => update('invoiceCounter', parseInt(e.target.value) || 1)} />
+            <div style={{ fontSize: '11px', color: colors.ink + '99', marginTop: '6px' }}>
+              The next invoice you generate will be #{info.invoiceCounter}. After that it will auto-increment.
+            </div>
+          </Field>
+        </div>
+      </div>
     </div>
   );
 }
