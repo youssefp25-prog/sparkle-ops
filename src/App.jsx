@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { Plus, Trash2, FileText, Grid3x3, Download, Printer, Save, RotateCcw, Users, DollarSign, Clock, BookUser, TrendingUp, AlertCircle, Repeat, Search, X, Check, Phone, MapPin, Edit2, ChevronRight, FileSpreadsheet, CalendarDays, Truck, Home, Building2, Navigation } from 'lucide-react';
 
 const CLEANERS = ['Leah', 'Eva', 'Zainab', 'Roselyn', 'Coline', 'Angel', 'Razelle'];
