@@ -1,6 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx-js-style';
-import { Plus, Trash2, FileText, Grid3x3, Download, Printer, Save, RotateCcw, Users, DollarSign, Clock, BookUser, TrendingUp, AlertCircle, Repeat, Search, X, Check, Phone, MapPin, Edit2, ChevronRight, FileSpreadsheet, CalendarDays, Truck, Home, Building2, Navigation, Receipt, Settings, MessageCircle, Wallet, Tag, CreditCard } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
+import { Plus, Trash2, FileText, Grid3x3, Download, Printer, Save, RotateCcw, Users, DollarSign, Clock, BookUser, TrendingUp, AlertCircle, Repeat, Search, X, Check, Phone, MapPin, Edit2, ChevronRight, FileSpreadsheet, CalendarDays, Truck, Home, Building2, Navigation, Receipt, Settings, MessageCircle, Wallet, Tag, CreditCard, Cloud, CloudOff, RefreshCw } from 'lucide-react';
+
+// ===== SUPABASE CLOUD CONNECTION =====
+const SUPABASE_URL = 'https://atokkkspcampdoivrxwg.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF0b2tra3NwY2FtcGRvaXZyeHdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1NTY3MTUsImV4cCI6MjA5MzEzMjcxNX0.caS-qlXLJp9KhuikrooM23vEiIVSZ3taheZ3rONNU1U';
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const CLEANERS = ['Leah', 'Eva', 'Zainab', 'Roselyn', 'Coline', 'Angel', 'Razelle'];
 const PICKUP_TYPES = ['HOME', 'OFFICE'];
@@ -67,6 +73,8 @@ export default function CleaningApp() {
   const [cleanerHomes, setCleanerHomes] = useState({}); // { Leah: { address, lat, lng }, ... }
   const [officeAddress, setOfficeAddress] = useState({ address: 'Office, Abu Dhabi', lat: 24.4539, lng: 54.3773 });
   const [expenses, setExpenses] = useState([]);
+  const [cloudStatus, setCloudStatus] = useState('connecting'); // 'connecting', 'synced', 'syncing', 'offline'
+  const [lastSync, setLastSync] = useState(null);
   const [companyInfo, setCompanyInfo] = useState({
     name: 'AR Cleaning Services',
     address: 'Office 92, M-floor Al Jazeera Bldg, Abu Dhabi City, UAE',
@@ -83,41 +91,121 @@ export default function CleaningApp() {
     logoDataUrl: ''
   });
 
-  // ===== LOAD FROM LOCALSTORAGE ON MOUNT =====
+  // ===== LOAD FROM CLOUD (with localStorage fallback) =====
   useEffect(() => {
-    try {
-      const daysRaw = localStorage.getItem('sparkle_all_days');
-      if (daysRaw) {
-        const d = JSON.parse(daysRaw);
-        setSavedDays(d);
-        const today = new Date().toISOString().split('T')[0];
-        if (d[today]) setBookings(d[today].bookings);
+    const loadFromCloud = async () => {
+      setCloudStatus('connecting');
+
+      // First, load from localStorage immediately so UI is not empty
+      try {
+        const daysRaw = localStorage.getItem('sparkle_all_days');
+        if (daysRaw) {
+          const d = JSON.parse(daysRaw);
+          setSavedDays(d);
+          const today = new Date().toISOString().split('T')[0];
+          if (d[today]) setBookings(d[today].bookings);
+        }
+        const clientsRaw = localStorage.getItem('sparkle_clients');
+        if (clientsRaw) setClients(JSON.parse(clientsRaw));
+        const contractsRaw = localStorage.getItem('sparkle_contracts');
+        if (contractsRaw) setContracts(JSON.parse(contractsRaw));
+        const homesRaw = localStorage.getItem('sparkle_cleaner_homes');
+        if (homesRaw) setCleanerHomes(JSON.parse(homesRaw));
+        const officeRaw = localStorage.getItem('sparkle_office');
+        if (officeRaw) setOfficeAddress(JSON.parse(officeRaw));
+        const companyRaw = localStorage.getItem('sparkle_company');
+        if (companyRaw) setCompanyInfo(prev => ({ ...prev, ...JSON.parse(companyRaw) }));
+        const expensesRaw = localStorage.getItem('sparkle_expenses');
+        if (expensesRaw) setExpenses(JSON.parse(expensesRaw));
+      } catch (e) { console.error('Local load error:', e); }
+
+      // Then try to fetch from cloud and overwrite local data with cloud data
+      try {
+        // Days
+        const { data: daysData, error: daysErr } = await supabase.from('days').select('*');
+        if (!daysErr && daysData) {
+          const daysMap = {};
+          daysData.forEach(d => {
+            daysMap[d.date] = { bookings: d.bookings, savedAt: d.saved_at };
+          });
+          setSavedDays(daysMap);
+          try { localStorage.setItem('sparkle_all_days', JSON.stringify(daysMap)); } catch (e) {}
+          const today = new Date().toISOString().split('T')[0];
+          if (daysMap[today]) setBookings(daysMap[today].bookings);
+        }
+
+        // Clients
+        const { data: clientsData, error: clientsErr } = await supabase.from('clients').select('*');
+        if (!clientsErr && clientsData) {
+          const cs = clientsData.map(c => ({
+            id: c.id, name: c.name, phone: c.phone || '', address: c.address || '',
+            defaultRate: c.default_rate || 25, defaultMaterials: c.default_materials || false,
+            notes: c.notes || '', lat: c.lat, lng: c.lng
+          }));
+          setClients(cs);
+          try { localStorage.setItem('sparkle_clients', JSON.stringify(cs)); } catch (e) {}
+        }
+
+        // Contracts
+        const { data: contractsData, error: contractsErr } = await supabase.from('contracts').select('*');
+        if (!contractsErr && contractsData) {
+          const cs = contractsData.map(c => ({
+            id: c.id, clientId: c.client_id, clientName: c.client_name, cleaner: c.cleaner,
+            daysOfWeek: c.days_of_week || [], timing: c.timing || '',
+            pricePerHour: c.price_per_hour || 25, withMaterials: c.with_materials || false,
+            paymentType: c.payment_type || 'ONLINE', active: c.active !== false,
+            startDate: c.start_date || ''
+          }));
+          setContracts(cs);
+          try { localStorage.setItem('sparkle_contracts', JSON.stringify(cs)); } catch (e) {}
+        }
+
+        // Cleaner homes
+        const { data: homesData, error: homesErr } = await supabase.from('cleaner_homes').select('*');
+        if (!homesErr && homesData) {
+          const homes = {};
+          homesData.forEach(h => {
+            homes[h.cleaner] = { address: h.address || '', lat: h.lat, lng: h.lng };
+          });
+          setCleanerHomes(homes);
+          try { localStorage.setItem('sparkle_cleaner_homes', JSON.stringify(homes)); } catch (e) {}
+        }
+
+        // Office
+        const { data: officeData, error: officeErr } = await supabase.from('office').select('*').eq('id', 1).single();
+        if (!officeErr && officeData) {
+          const office = { address: officeData.address || 'Office, Abu Dhabi', lat: officeData.lat || 24.4539, lng: officeData.lng || 54.3773 };
+          setOfficeAddress(office);
+          try { localStorage.setItem('sparkle_office', JSON.stringify(office)); } catch (e) {}
+        }
+
+        // Company
+        const { data: companyData, error: companyErr } = await supabase.from('company').select('*').eq('id', 1).single();
+        if (!companyErr && companyData && companyData.data) {
+          setCompanyInfo(prev => ({ ...prev, ...companyData.data }));
+          try { localStorage.setItem('sparkle_company', JSON.stringify(companyData.data)); } catch (e) {}
+        }
+
+        // Expenses
+        const { data: expensesData, error: expensesErr } = await supabase.from('expenses').select('*');
+        if (!expensesErr && expensesData) {
+          const es = expensesData.map(e => ({
+            id: e.id, date: e.date, category: e.category, amount: e.amount,
+            paymentMethod: e.payment_method, description: e.description || '',
+            vendor: e.vendor || '', receipt: e.receipt || '', notes: e.notes || ''
+          }));
+          setExpenses(es);
+          try { localStorage.setItem('sparkle_expenses', JSON.stringify(es)); } catch (e) {}
+        }
+
+        setCloudStatus('synced');
+        setLastSync(new Date());
+      } catch (e) {
+        console.error('Cloud load error:', e);
+        setCloudStatus('offline');
       }
-    } catch (e) {}
-    try {
-      const clientsRaw = localStorage.getItem('sparkle_clients');
-      if (clientsRaw) setClients(JSON.parse(clientsRaw));
-    } catch (e) {}
-    try {
-      const contractsRaw = localStorage.getItem('sparkle_contracts');
-      if (contractsRaw) setContracts(JSON.parse(contractsRaw));
-    } catch (e) {}
-    try {
-      const homesRaw = localStorage.getItem('sparkle_cleaner_homes');
-      if (homesRaw) setCleanerHomes(JSON.parse(homesRaw));
-    } catch (e) {}
-    try {
-      const officeRaw = localStorage.getItem('sparkle_office');
-      if (officeRaw) setOfficeAddress(JSON.parse(officeRaw));
-    } catch (e) {}
-    try {
-      const companyRaw = localStorage.getItem('sparkle_company');
-      if (companyRaw) setCompanyInfo(prev => ({ ...prev, ...JSON.parse(companyRaw) }));
-    } catch (e) {}
-    try {
-      const expensesRaw = localStorage.getItem('sparkle_expenses');
-      if (expensesRaw) setExpenses(JSON.parse(expensesRaw));
-    } catch (e) {}
+    };
+    loadFromCloud();
   }, []);
 
   useEffect(() => {
@@ -140,13 +228,22 @@ export default function CleaningApp() {
     setClientPickerFor(null);
   };
 
-  const saveDay = () => {
+  const saveDay = async () => {
     const newSaved = { ...savedDays, [date]: { bookings, savedAt: new Date().toISOString() } };
     setSavedDays(newSaved);
+    try { localStorage.setItem('sparkle_all_days', JSON.stringify(newSaved)); } catch (e) {}
+    setCloudStatus('syncing');
     try {
-      localStorage.setItem('sparkle_all_days', JSON.stringify(newSaved));
-      showStatus('✓ Day saved');
-    } catch (e) { showStatus('⚠ Save failed'); }
+      const { error } = await supabase.from('days').upsert({ date, bookings, saved_at: new Date().toISOString() });
+      if (error) throw error;
+      setCloudStatus('synced');
+      setLastSync(new Date());
+      showStatus('✓ Day saved & synced to cloud');
+    } catch (e) {
+      setCloudStatus('offline');
+      showStatus('✓ Day saved locally (cloud sync failed)');
+      console.error('Cloud save error:', e);
+    }
   };
 
   const clearDay = () => { if (confirm('Clear bookings for this day?')) setBookings([emptyBooking()]); };
@@ -157,34 +254,151 @@ export default function CleaningApp() {
     else setBookings([emptyBooking()]);
   };
 
-  const saveClients = (next) => {
+  const saveClients = async (next) => {
     setClients(next);
     try { localStorage.setItem('sparkle_clients', JSON.stringify(next)); } catch (e) {}
+    setCloudStatus('syncing');
+    try {
+      // Get current cloud client IDs to detect deletions
+      const { data: cloudClients } = await supabase.from('clients').select('id');
+      const cloudIds = new Set((cloudClients || []).map(c => c.id));
+      const localIds = new Set(next.map(c => c.id));
+      const toDelete = [...cloudIds].filter(id => !localIds.has(id));
+      if (toDelete.length > 0) {
+        await supabase.from('clients').delete().in('id', toDelete);
+      }
+      // Upsert all current clients
+      if (next.length > 0) {
+        const rows = next.map(c => ({
+          id: c.id, name: c.name, phone: c.phone || '', address: c.address || '',
+          default_rate: c.defaultRate || 25, default_materials: c.defaultMaterials || false,
+          notes: c.notes || '', lat: c.lat || null, lng: c.lng || null
+        }));
+        const { error } = await supabase.from('clients').upsert(rows);
+        if (error) throw error;
+      }
+      setCloudStatus('synced');
+      setLastSync(new Date());
+    } catch (e) {
+      setCloudStatus('offline');
+      console.error('Cloud sync error (clients):', e);
+    }
   };
 
-  const saveContracts = (next) => {
+  const saveContracts = async (next) => {
     setContracts(next);
     try { localStorage.setItem('sparkle_contracts', JSON.stringify(next)); } catch (e) {}
+    setCloudStatus('syncing');
+    try {
+      const { data: cloudContracts } = await supabase.from('contracts').select('id');
+      const cloudIds = new Set((cloudContracts || []).map(c => c.id));
+      const localIds = new Set(next.map(c => c.id));
+      const toDelete = [...cloudIds].filter(id => !localIds.has(id));
+      if (toDelete.length > 0) {
+        await supabase.from('contracts').delete().in('id', toDelete);
+      }
+      if (next.length > 0) {
+        const rows = next.map(c => ({
+          id: c.id, client_id: c.clientId, client_name: c.clientName, cleaner: c.cleaner,
+          days_of_week: c.daysOfWeek || [], timing: c.timing || '',
+          price_per_hour: c.pricePerHour || 25, with_materials: c.withMaterials || false,
+          payment_type: c.paymentType || 'ONLINE', active: c.active !== false,
+          start_date: c.startDate || null
+        }));
+        const { error } = await supabase.from('contracts').upsert(rows);
+        if (error) throw error;
+      }
+      setCloudStatus('synced');
+      setLastSync(new Date());
+    } catch (e) {
+      setCloudStatus('offline');
+      console.error('Cloud sync error (contracts):', e);
+    }
   };
 
-  const saveCleanerHomes = (next) => {
+  const saveCleanerHomes = async (next) => {
     setCleanerHomes(next);
     try { localStorage.setItem('sparkle_cleaner_homes', JSON.stringify(next)); } catch (e) {}
+    setCloudStatus('syncing');
+    try {
+      const rows = Object.entries(next).filter(([_, h]) => h && h.address).map(([cleaner, h]) => ({
+        cleaner, address: h.address || '', lat: h.lat || null, lng: h.lng || null,
+        updated_at: new Date().toISOString()
+      }));
+      if (rows.length > 0) {
+        const { error } = await supabase.from('cleaner_homes').upsert(rows);
+        if (error) throw error;
+      }
+      setCloudStatus('synced');
+      setLastSync(new Date());
+    } catch (e) {
+      setCloudStatus('offline');
+      console.error('Cloud sync error (cleaner_homes):', e);
+    }
   };
 
-  const saveOfficeAddress = (next) => {
+  const saveOfficeAddress = async (next) => {
     setOfficeAddress(next);
     try { localStorage.setItem('sparkle_office', JSON.stringify(next)); } catch (e) {}
+    setCloudStatus('syncing');
+    try {
+      const { error } = await supabase.from('office').upsert({
+        id: 1, address: next.address || '', lat: next.lat || null, lng: next.lng || null,
+        updated_at: new Date().toISOString()
+      });
+      if (error) throw error;
+      setCloudStatus('synced');
+      setLastSync(new Date());
+    } catch (e) {
+      setCloudStatus('offline');
+      console.error('Cloud sync error (office):', e);
+    }
   };
 
-  const saveCompanyInfo = (next) => {
+  const saveCompanyInfo = async (next) => {
     setCompanyInfo(next);
     try { localStorage.setItem('sparkle_company', JSON.stringify(next)); } catch (e) {}
+    setCloudStatus('syncing');
+    try {
+      const { error } = await supabase.from('company').upsert({
+        id: 1, data: next, updated_at: new Date().toISOString()
+      });
+      if (error) throw error;
+      setCloudStatus('synced');
+      setLastSync(new Date());
+    } catch (e) {
+      setCloudStatus('offline');
+      console.error('Cloud sync error (company):', e);
+    }
   };
 
-  const saveExpenses = (next) => {
+  const saveExpenses = async (next) => {
     setExpenses(next);
     try { localStorage.setItem('sparkle_expenses', JSON.stringify(next)); } catch (e) {}
+    setCloudStatus('syncing');
+    try {
+      const { data: cloudExpenses } = await supabase.from('expenses').select('id');
+      const cloudIds = new Set((cloudExpenses || []).map(e => e.id));
+      const localIds = new Set(next.map(e => e.id));
+      const toDelete = [...cloudIds].filter(id => !localIds.has(id));
+      if (toDelete.length > 0) {
+        await supabase.from('expenses').delete().in('id', toDelete);
+      }
+      if (next.length > 0) {
+        const rows = next.map(e => ({
+          id: e.id, date: e.date, category: e.category, amount: parseFloat(e.amount || 0),
+          payment_method: e.paymentMethod, description: e.description || '',
+          vendor: e.vendor || '', receipt: e.receipt || '', notes: e.notes || ''
+        }));
+        const { error } = await supabase.from('expenses').upsert(rows);
+        if (error) throw error;
+      }
+      setCloudStatus('synced');
+      setLastSync(new Date());
+    } catch (e) {
+      setCloudStatus('offline');
+      console.error('Cloud sync error (expenses):', e);
+    }
   };
 
   const generateFromContracts = () => {
@@ -876,6 +1090,7 @@ export default function CleaningApp() {
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             {statusMsg && <span style={{ fontSize: '13px', color: colors.accent, fontWeight: 600 }}>{statusMsg}</span>}
+            <CloudSyncBadge status={cloudStatus} lastSync={lastSync} colors={colors} />
             <input type="date" className="input" value={date} onChange={e => loadDate(e.target.value)} style={{ width: 'auto' }} />
             <button className="btn btn-primary" onClick={saveDay}><Save size={14} /> Save Day</button>
           </div>
@@ -908,7 +1123,7 @@ export default function CleaningApp() {
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={CLEANERS} updateBooking={updateBooking} />}
         {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
         {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} />}
-        {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
+        {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} cloudStatus={cloudStatus} lastSync={lastSync} bookings={bookings} savedDays={savedDays} clients={clients} contracts={contracts} cleanerHomes={cleanerHomes} officeAddress={officeAddress} expenses={expenses} setCloudStatus={setCloudStatus} setLastSync={setLastSync} />}
       </div>
 
       {clientPickerFor && <ClientPickerModal clients={clients} onPick={(c) => applyClientToBooking(clientPickerFor, c)} onClose={() => setClientPickerFor(null)} colors={colors} />}
@@ -2669,9 +2884,11 @@ function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineIte
   );
 }
 
-function SettingsView({ companyInfo, saveCompanyInfo, colors }) {
+function SettingsView({ companyInfo, saveCompanyInfo, colors, cloudStatus, lastSync, bookings, savedDays, clients, contracts, cleanerHomes, officeAddress, expenses, setCloudStatus, setLastSync }) {
   const [info, setInfo] = React.useState(companyInfo);
   const [savedMsg, setSavedMsg] = React.useState('');
+  const [migrating, setMigrating] = React.useState(false);
+  const [migrationLog, setMigrationLog] = React.useState([]);
 
   React.useEffect(() => { setInfo(companyInfo); }, [companyInfo]);
 
@@ -2695,6 +2912,110 @@ function SettingsView({ companyInfo, saveCompanyInfo, colors }) {
     setTimeout(() => setSavedMsg(''), 2500);
   };
 
+  const pushAllToCloud = async () => {
+    if (!confirm('This will push ALL your local data to the cloud, overwriting any existing cloud data. Continue?')) return;
+    setMigrating(true);
+    setMigrationLog([]);
+    const log = (msg) => setMigrationLog(prev => [...prev, msg]);
+
+    try {
+      // 1. Push all saved days
+      log('Pushing daily bookings...');
+      const dayRows = Object.entries(savedDays).map(([date, d]) => ({
+        date, bookings: d.bookings, saved_at: d.savedAt || new Date().toISOString()
+      }));
+      // Also include current day's bookings if not in savedDays
+      const today = new Date().toISOString().split('T')[0];
+      if (!savedDays[today] && bookings.length > 0 && bookings.some(b => b.clientName || b.location)) {
+        dayRows.push({ date: today, bookings, saved_at: new Date().toISOString() });
+      }
+      if (dayRows.length > 0) {
+        const { error } = await supabase.from('days').upsert(dayRows);
+        if (error) throw error;
+      }
+      log(`✓ ${dayRows.length} day(s) synced`);
+
+      // 2. Push clients
+      log('Pushing clients...');
+      if (clients.length > 0) {
+        const rows = clients.map(c => ({
+          id: c.id, name: c.name, phone: c.phone || '', address: c.address || '',
+          default_rate: c.defaultRate || 25, default_materials: c.defaultMaterials || false,
+          notes: c.notes || '', lat: c.lat || null, lng: c.lng || null
+        }));
+        const { error } = await supabase.from('clients').upsert(rows);
+        if (error) throw error;
+      }
+      log(`✓ ${clients.length} client(s) synced`);
+
+      // 3. Push contracts
+      log('Pushing contracts...');
+      if (contracts.length > 0) {
+        const rows = contracts.map(c => ({
+          id: c.id, client_id: c.clientId, client_name: c.clientName, cleaner: c.cleaner,
+          days_of_week: c.daysOfWeek || [], timing: c.timing || '',
+          price_per_hour: c.pricePerHour || 25, with_materials: c.withMaterials || false,
+          payment_type: c.paymentType || 'ONLINE', active: c.active !== false,
+          start_date: c.startDate || null
+        }));
+        const { error } = await supabase.from('contracts').upsert(rows);
+        if (error) throw error;
+      }
+      log(`✓ ${contracts.length} contract(s) synced`);
+
+      // 4. Push cleaner homes
+      log('Pushing cleaner homes...');
+      const homeRows = Object.entries(cleanerHomes).filter(([_, h]) => h && h.address).map(([cleaner, h]) => ({
+        cleaner, address: h.address || '', lat: h.lat || null, lng: h.lng || null,
+        updated_at: new Date().toISOString()
+      }));
+      if (homeRows.length > 0) {
+        const { error } = await supabase.from('cleaner_homes').upsert(homeRows);
+        if (error) throw error;
+      }
+      log(`✓ ${homeRows.length} cleaner home(s) synced`);
+
+      // 5. Push office
+      log('Pushing office address...');
+      const { error: officeErr } = await supabase.from('office').upsert({
+        id: 1, address: officeAddress.address || '', lat: officeAddress.lat || null, lng: officeAddress.lng || null,
+        updated_at: new Date().toISOString()
+      });
+      if (officeErr) throw officeErr;
+      log('✓ Office synced');
+
+      // 6. Push company info
+      log('Pushing company settings...');
+      const { error: companyErr } = await supabase.from('company').upsert({
+        id: 1, data: info, updated_at: new Date().toISOString()
+      });
+      if (companyErr) throw companyErr;
+      log('✓ Company settings synced');
+
+      // 7. Push expenses
+      log('Pushing expenses...');
+      if (expenses.length > 0) {
+        const rows = expenses.map(e => ({
+          id: e.id, date: e.date, category: e.category, amount: parseFloat(e.amount || 0),
+          payment_method: e.paymentMethod, description: e.description || '',
+          vendor: e.vendor || '', receipt: e.receipt || '', notes: e.notes || ''
+        }));
+        const { error } = await supabase.from('expenses').upsert(rows);
+        if (error) throw error;
+      }
+      log(`✓ ${expenses.length} expense(s) synced`);
+
+      log('🎉 ALL DATA SYNCED TO CLOUD!');
+      setCloudStatus('synced');
+      setLastSync(new Date());
+    } catch (e) {
+      console.error('Migration error:', e);
+      log(`❌ Error: ${e.message || 'Sync failed'}`);
+      setCloudStatus('offline');
+    }
+    setMigrating(false);
+  };
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
@@ -2706,6 +3027,36 @@ function SettingsView({ companyInfo, saveCompanyInfo, colors }) {
           {savedMsg && <span style={{ color: colors.accent, fontWeight: 600, fontSize: '13px' }}>{savedMsg}</span>}
           <button className="btn btn-primary" onClick={save}><Save size={14} /> Save Settings</button>
         </div>
+      </div>
+
+      {/* Cloud Sync Section */}
+      <div style={{ background: 'white', borderRadius: '12px', border: `2px solid ${cloudStatus === 'synced' ? colors.accent : colors.border}`, padding: '20px', marginBottom: '16px' }}>
+        <h3 className="display-font" style={{ margin: '0 0 4px', fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Cloud size={20} color={colors.accent} /> Cloud Sync
+        </h3>
+        <p style={{ margin: '0 0 14px', fontSize: '12px', color: colors.ink + '99' }}>
+          Your data is synced to Supabase cloud database. Changes sync automatically across all devices.
+        </p>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px' }}>
+          <CloudSyncBadge status={cloudStatus} lastSync={lastSync} colors={colors} />
+          {lastSync && <span style={{ fontSize: '12px', color: colors.ink + '99' }}>Last synced at {lastSync.toLocaleTimeString()}</span>}
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button className="btn btn-primary" onClick={pushAllToCloud} disabled={migrating}>
+            {migrating ? <><RefreshCw size={14} className="spin" /> Migrating...</> : <><Cloud size={14} /> Push all local data to cloud</>}
+          </button>
+          <button className="btn" onClick={() => window.location.reload()}>
+            <RefreshCw size={14} /> Reload from cloud
+          </button>
+        </div>
+        {migrationLog.length > 0 && (
+          <div style={{ marginTop: '14px', padding: '12px', background: colors.soft, borderRadius: '6px', fontSize: '12px', fontFamily: 'monospace', maxHeight: '200px', overflowY: 'auto' }}>
+            {migrationLog.map((line, i) => <div key={i} style={{ marginBottom: '2px' }}>{line}</div>)}
+          </div>
+        )}
+        <p style={{ margin: '12px 0 0', fontSize: '11px', color: colors.ink + '99', fontStyle: 'italic' }}>
+          💡 First-time setup: Click "Push all local data to cloud" to upload your existing bookings, clients, contracts, expenses, and settings. After that, every change syncs automatically.
+        </p>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '16px' }}>
@@ -3172,6 +3523,29 @@ function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWi
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function CloudSyncBadge({ status, lastSync, colors }) {
+  const config = {
+    connecting: { icon: <RefreshCw size={12} className="spin" />, label: 'Connecting...', bg: '#FEF3C7', color: '#D97706', border: '#F59E0B' },
+    synced: { icon: <Cloud size={12} />, label: 'Synced', bg: '#D1FAE5', color: '#0F4C3A', border: '#10B981' },
+    syncing: { icon: <RefreshCw size={12} className="spin" />, label: 'Syncing...', bg: '#DBEAFE', color: '#1D4ED8', border: '#3B82F6' },
+    offline: { icon: <CloudOff size={12} />, label: 'Offline', bg: '#FEE2E2', color: '#B8472A', border: '#EF4444' }
+  };
+  const c = config[status] || config.connecting;
+  const tooltip = lastSync ? `Last synced: ${lastSync.toLocaleTimeString()}` : 'Cloud sync status';
+
+  return (
+    <div title={tooltip} style={{
+      display: 'inline-flex', alignItems: 'center', gap: '5px',
+      padding: '5px 10px', borderRadius: '6px',
+      background: c.bg, color: c.color, border: `1px solid ${c.border}`,
+      fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em'
+    }}>
+      <style>{`.spin { animation: spin 1.2s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      {c.icon} {c.label}
     </div>
   );
 }
