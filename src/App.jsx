@@ -77,6 +77,165 @@ export default function CleaningApp() {
     invoiceCounter: 3003,
     logoDataUrl: ''
   });
+
+  // ===== LOAD FROM LOCALSTORAGE ON MOUNT =====
+  useEffect(() => {
+    try {
+      const daysRaw = localStorage.getItem('sparkle_all_days');
+      if (daysRaw) {
+        const d = JSON.parse(daysRaw);
+        setSavedDays(d);
+        const today = new Date().toISOString().split('T')[0];
+        if (d[today]) setBookings(d[today].bookings);
+      }
+    } catch (e) {}
+    try {
+      const clientsRaw = localStorage.getItem('sparkle_clients');
+      if (clientsRaw) setClients(JSON.parse(clientsRaw));
+    } catch (e) {}
+    try {
+      const contractsRaw = localStorage.getItem('sparkle_contracts');
+      if (contractsRaw) setContracts(JSON.parse(contractsRaw));
+    } catch (e) {}
+    try {
+      const homesRaw = localStorage.getItem('sparkle_cleaner_homes');
+      if (homesRaw) setCleanerHomes(JSON.parse(homesRaw));
+    } catch (e) {}
+    try {
+      const officeRaw = localStorage.getItem('sparkle_office');
+      if (officeRaw) setOfficeAddress(JSON.parse(officeRaw));
+    } catch (e) {}
+    try {
+      const companyRaw = localStorage.getItem('sparkle_company');
+      if (companyRaw) setCompanyInfo(prev => ({ ...prev, ...JSON.parse(companyRaw) }));
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => {
+    if (savedDays[date]) setBookings(savedDays[date].bookings);
+  }, [date]);
+
+  // ===== HELPER FUNCTIONS =====
+  const showStatus = (m) => { setStatusMsg(m); setTimeout(() => setStatusMsg(''), 2500); };
+
+  const updateBooking = (id, field, value) => setBookings(bookings.map(b => b.id === id ? { ...b, [field]: value } : b));
+  const addBooking = () => setBookings([...bookings, emptyBooking()]);
+  const removeBooking = (id) => setBookings(bookings.filter(b => b.id !== id));
+
+  const applyClientToBooking = (bookingId, client) => {
+    setBookings(bookings.map(b => b.id === bookingId ? {
+      ...b, clientId: client.id, clientName: client.name, location: client.address,
+      phone: client.phone, pricePerHour: client.defaultRate, withMaterials: client.defaultMaterials,
+    } : b));
+    setClientPickerFor(null);
+  };
+
+  const saveDay = () => {
+    const newSaved = { ...savedDays, [date]: { bookings, savedAt: new Date().toISOString() } };
+    setSavedDays(newSaved);
+    try {
+      localStorage.setItem('sparkle_all_days', JSON.stringify(newSaved));
+      showStatus('✓ Day saved');
+    } catch (e) { showStatus('⚠ Save failed'); }
+  };
+
+  const clearDay = () => { if (confirm('Clear bookings for this day?')) setBookings([emptyBooking()]); };
+
+  const loadDate = (d) => {
+    setDate(d);
+    if (savedDays[d]) setBookings(savedDays[d].bookings);
+    else setBookings([emptyBooking()]);
+  };
+
+  const saveClients = (next) => {
+    setClients(next);
+    try { localStorage.setItem('sparkle_clients', JSON.stringify(next)); } catch (e) {}
+  };
+
+  const saveContracts = (next) => {
+    setContracts(next);
+    try { localStorage.setItem('sparkle_contracts', JSON.stringify(next)); } catch (e) {}
+  };
+
+  const saveCleanerHomes = (next) => {
+    setCleanerHomes(next);
+    try { localStorage.setItem('sparkle_cleaner_homes', JSON.stringify(next)); } catch (e) {}
+  };
+
+  const saveOfficeAddress = (next) => {
+    setOfficeAddress(next);
+    try { localStorage.setItem('sparkle_office', JSON.stringify(next)); } catch (e) {}
+  };
+
+  const saveCompanyInfo = (next) => {
+    setCompanyInfo(next);
+    try { localStorage.setItem('sparkle_company', JSON.stringify(next)); } catch (e) {}
+  };
+
+  const generateFromContracts = () => {
+    const dayOfWeek = new Date(date).getDay();
+    const matching = contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek));
+    if (matching.length === 0) { showStatus('No contracts for this day'); return; }
+    const existingClientIds = new Set(bookings.map(b => b.clientId).filter(Boolean));
+    const newBookings = matching.filter(c => !existingClientIds.has(c.clientId)).map(c => {
+      const client = clients.find(cl => cl.id === c.clientId);
+      return {
+        ...emptyBooking(), cleaner: c.cleaner, timing: c.timing, clientId: c.clientId,
+        clientName: c.clientName, location: client?.address || '', phone: client?.phone || '',
+        pricePerHour: c.pricePerHour, withMaterials: c.withMaterials, paymentType: c.paymentType,
+      };
+    });
+    if (newBookings.length === 0) { showStatus('Already added'); return; }
+    const cleanedExisting = bookings.filter(b => b.clientName || b.location);
+    setBookings([...cleanedExisting, ...newBookings]);
+    showStatus(`✓ Added ${newBookings.length} contract booking${newBookings.length > 1 ? 's' : ''}`);
+  };
+
+  // ===== DERIVED STATE =====
+  const bookingsWithCalc = bookings.filter(b => b.clientName || b.location).map(b => {
+    const hours = parseHours(b.timing);
+    return { ...b, hours, total: hours * parseFloat(b.pricePerHour || 0) };
+  });
+
+  const byCleaner = {};
+  CLEANERS.forEach(c => byCleaner[c] = []);
+  bookingsWithCalc.forEach(b => { if (byCleaner[b.cleaner]) byCleaner[b.cleaner].push(b); });
+
+  const totalRevenue = bookingsWithCalc.reduce((s, b) => s + b.total, 0);
+  const totalHours = bookingsWithCalc.reduce((s, b) => s + b.hours, 0);
+  const cashTotal = bookingsWithCalc.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + b.total, 0);
+  const onlineTotal = bookingsWithCalc.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + b.total, 0);
+  const activeCleaners = CLEANERS.filter(c => byCleaner[c].length > 0).length;
+
+  const allBookingsWithDate = [];
+  Object.entries(savedDays).forEach(([d, data]) => {
+    data.bookings.forEach(b => {
+      if (b.clientName || b.location) {
+        const hrs = parseHours(b.timing);
+        allBookingsWithDate.push({ ...b, date: d, hours: hrs, total: hrs * parseFloat(b.pricePerHour || 0) });
+      }
+    });
+  });
+  if (!savedDays[date]) bookingsWithCalc.forEach(b => allBookingsWithDate.push({ ...b, date }));
+
+  const formatDate = (d) => new Date(d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const formatDateShort = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+  const exportCSV = () => {
+    const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'MATERIALS', 'HOURS', 'RATE', 'TOTAL', 'PAY TYPE', 'STATUS'];
+    const rows = bookingsWithCalc.map(b => [
+      new Date(date).getDate(), b.cleaner, b.timing, b.clientName, b.location,
+      b.withMaterials ? 'Yes' : 'No', b.hours, b.pricePerHour, b.total.toFixed(2), b.paymentType, b.paymentStatus
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `report_${date}.csv`; a.click();
+  };
+
+  const printPage = () => window.print();
+
   // ===== EXCEL EXPORT FUNCTIONS (matching deployment grid style) =====
   // Color palette matching the app:
   //   Green header: #0F4C3A
