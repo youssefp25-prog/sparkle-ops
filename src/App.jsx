@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx-js-style';
-import { Plus, Trash2, FileText, Grid3x3, Download, Printer, Save, RotateCcw, Users, DollarSign, Clock, BookUser, TrendingUp, AlertCircle, Repeat, Search, X, Check, Phone, MapPin, Edit2, ChevronRight, FileSpreadsheet, CalendarDays, Truck, Home, Building2, Navigation, Receipt, Settings, MessageCircle } from 'lucide-react';
+import { Plus, Trash2, FileText, Grid3x3, Download, Printer, Save, RotateCcw, Users, DollarSign, Clock, BookUser, TrendingUp, AlertCircle, Repeat, Search, X, Check, Phone, MapPin, Edit2, ChevronRight, FileSpreadsheet, CalendarDays, Truck, Home, Building2, Navigation, Receipt, Settings, MessageCircle, Wallet, Tag, CreditCard } from 'lucide-react';
 
 const CLEANERS = ['Leah', 'Eva', 'Zainab', 'Roselyn', 'Coline', 'Angel', 'Razelle'];
 const PICKUP_TYPES = ['HOME', 'OFFICE'];
+const EXPENSE_CATEGORIES = ['Salaries', 'Transport', 'Materials', 'Marketing', 'Rent', 'Utilities', 'Maintenance/Repairs', 'PPE & Uniforms', 'Staff Meals/Allowances', 'Office Supplies', 'Government Fees', 'Bank Charges', 'Software/Subscriptions', 'Fuel', 'Vehicle Service', 'Miscellaneous'];
+const EXPENSE_PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Credit Card', 'Cheque', 'Online Gateway'];
 // Cleaner colors for map pins (distinct, easy to differentiate)
 const CLEANER_COLORS = {
   'Leah': '#E63946',     // Red
@@ -41,7 +43,8 @@ const emptyBooking = () => ({
 
 const emptyClient = () => ({
   id: 'c_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-  name: '', phone: '', address: '', defaultRate: 25, defaultMaterials: false, notes: ''
+  name: '', phone: '', address: '', defaultRate: 25, defaultMaterials: false, notes: '',
+  lat: null, lng: null
 });
 
 const emptyContract = () => ({
@@ -60,8 +63,10 @@ export default function CleaningApp() {
   const [contracts, setContracts] = useState([]);
   const [statusMsg, setStatusMsg] = useState('');
   const [clientPickerFor, setClientPickerFor] = useState(null);
+  const [bookingPinFor, setBookingPinFor] = useState(null);
   const [cleanerHomes, setCleanerHomes] = useState({}); // { Leah: { address, lat, lng }, ... }
   const [officeAddress, setOfficeAddress] = useState({ address: 'Office, Abu Dhabi', lat: 24.4539, lng: 54.3773 });
+  const [expenses, setExpenses] = useState([]);
   const [companyInfo, setCompanyInfo] = useState({
     name: 'AR Cleaning Services',
     address: 'Office 92, M-floor Al Jazeera Bldg, Abu Dhabi City, UAE',
@@ -109,6 +114,10 @@ export default function CleaningApp() {
       const companyRaw = localStorage.getItem('sparkle_company');
       if (companyRaw) setCompanyInfo(prev => ({ ...prev, ...JSON.parse(companyRaw) }));
     } catch (e) {}
+    try {
+      const expensesRaw = localStorage.getItem('sparkle_expenses');
+      if (expensesRaw) setExpenses(JSON.parse(expensesRaw));
+    } catch (e) {}
   }, []);
 
   useEffect(() => {
@@ -126,6 +135,7 @@ export default function CleaningApp() {
     setBookings(bookings.map(b => b.id === bookingId ? {
       ...b, clientId: client.id, clientName: client.name, location: client.address,
       phone: client.phone, pricePerHour: client.defaultRate, withMaterials: client.defaultMaterials,
+      lat: client.lat || null, lng: client.lng || null,
     } : b));
     setClientPickerFor(null);
   };
@@ -170,6 +180,11 @@ export default function CleaningApp() {
   const saveCompanyInfo = (next) => {
     setCompanyInfo(next);
     try { localStorage.setItem('sparkle_company', JSON.stringify(next)); } catch (e) {}
+  };
+
+  const saveExpenses = (next) => {
+    setExpenses(next);
+    try { localStorage.setItem('sparkle_expenses', JSON.stringify(next)); } catch (e) {}
   };
 
   const generateFromContracts = () => {
@@ -876,12 +891,13 @@ export default function CleaningApp() {
           <button className={`tab ${view === 'monthly' ? 'active' : ''}`} onClick={() => setView('monthly')}><CalendarDays size={15} /> Monthly Report</button>
           <button className={`tab ${view === 'driver' ? 'active' : ''}`} onClick={() => setView('driver')}><Truck size={15} /> Driver</button>
           <button className={`tab ${view === 'invoices' ? 'active' : ''}`} onClick={() => setView('invoices')}><Receipt size={15} /> Invoices</button>
+          <button className={`tab ${view === 'expenses' ? 'active' : ''}`} onClick={() => setView('expenses')}><Wallet size={15} /> Expenses</button>
           <button className={`tab ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Settings size={15} /> Settings</button>
         </div>
       </div>
 
       <div style={{ padding: '32px', maxWidth: '1400px', margin: '0 auto' }}>
-        {view === 'input' && <InputView bookings={bookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} clients={clients} setClientPickerFor={setClientPickerFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} />}
+        {view === 'input' && <InputView bookings={bookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} clients={clients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={CLEANERS} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
         {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} />}
@@ -891,15 +907,17 @@ export default function CleaningApp() {
         {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={CLEANERS} updateBooking={updateBooking} />}
         {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
+        {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} />}
         {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
       </div>
 
       {clientPickerFor && <ClientPickerModal clients={clients} onPick={(c) => applyClientToBooking(clientPickerFor, c)} onClose={() => setClientPickerFor(null)} colors={colors} />}
+      {bookingPinFor && <LocationPickerModal title="Pin Booking Location" initialLat={bookings.find(b => b.id === bookingPinFor)?.lat} initialLng={bookings.find(b => b.id === bookingPinFor)?.lng} initialAddress={bookings.find(b => b.id === bookingPinFor)?.location || ''} onSave={(lat, lng, address) => { updateBooking(bookingPinFor, 'lat', lat); updateBooking(bookingPinFor, 'lng', lng); if (address) updateBooking(bookingPinFor, 'location', address); setBookingPinFor(null); }} onClose={() => setBookingPinFor(null)} colors={colors} />}
     </div>
   );
 }
 
-function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, clients, setClientPickerFor, contracts, generateFromContracts, exportEverythingExcel }) {
+function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, clients, setClientPickerFor, setBookingPinFor, contracts, generateFromContracts, exportEverythingExcel }) {
   const dayOfWeek = new Date(date).getDay();
   const todayContracts = contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek));
 
@@ -964,7 +982,12 @@ function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, remo
                       </div>
                     </Td>
                     <Td>
-                      <input className="input" placeholder="Apt 101 Bldg" value={b.location} onChange={e => updateBooking(b.id, 'location', e.target.value)} style={{ marginBottom: '3px', minWidth: '180px' }} />
+                      <div style={{ display: 'flex', gap: '3px', marginBottom: '3px' }}>
+                        <input className="input" placeholder="Apt 101 Bldg" value={b.location} onChange={e => updateBooking(b.id, 'location', e.target.value)} style={{ minWidth: '160px' }} />
+                        <button className="btn btn-sm" title={b.lat ? `Pinned at ${b.lat.toFixed(4)}, ${b.lng.toFixed(4)}` : 'Pin location on map'} onClick={() => setBookingPinFor(b.id)} style={{ padding: '6px 8px', background: b.lat ? colors.accentLight : 'white', borderColor: b.lat ? colors.accent : colors.border }}>
+                          <MapPin size={14} style={{ color: b.lat ? colors.accent : colors.ink + '99' }} />
+                        </button>
+                      </div>
                       <input className="input" placeholder="Phone" value={b.phone || ''} onChange={e => updateBooking(b.id, 'phone', e.target.value)} style={{ fontSize: '11px', padding: '4px 8px', minWidth: '180px' }} />
                     </Td>
                     <Td>
@@ -1002,6 +1025,7 @@ function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, remo
 function ClientsView({ clients, saveClients, colors, allBookings, exportClientsExcel }) {
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState('');
+  const [showPinPicker, setShowPinPicker] = useState(false);
 
   const startNew = () => setEditing(emptyClient());
   const startEdit = (c) => setEditing({ ...c });
@@ -1088,7 +1112,13 @@ function ClientsView({ clients, saveClients, colors, allBookings, exportClientsE
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <Field label="Name *"><input className="input" value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} /></Field>
               <Field label="Phone"><input className="input" value={editing.phone} onChange={e => setEditing({ ...editing, phone: e.target.value })} placeholder="+971 50 ..." /></Field>
-              <Field label="Address"><textarea className="input" value={editing.address} onChange={e => setEditing({ ...editing, address: e.target.value })} placeholder="Apt 101 Building, Area" rows="2" style={{ resize: 'vertical' }} /></Field>
+              <Field label="Address & Location">
+                <textarea className="input" value={editing.address} onChange={e => setEditing({ ...editing, address: e.target.value })} placeholder="Apt 101 Building, Area" rows="2" style={{ resize: 'vertical', marginBottom: '4px' }} />
+                <button type="button" className="btn btn-sm" onClick={() => setShowPinPicker(true)} style={{ background: editing.lat ? colors.accentLight : 'white', borderColor: editing.lat ? colors.accent : colors.border, fontSize: '11px' }}>
+                  <MapPin size={12} style={{ color: editing.lat ? colors.accent : colors.ink + '99' }} />
+                  {editing.lat ? `Pinned (${editing.lat.toFixed(4)}, ${editing.lng.toFixed(4)})` : 'Pin location on map'}
+                </button>
+              </Field>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <Field label="Default Rate/hr"><input className="input" type="number" value={editing.defaultRate} onChange={e => setEditing({ ...editing, defaultRate: parseFloat(e.target.value) || 0 })} /></Field>
                 <Field label="Materials"><label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 0', fontSize: '13px' }}><input type="checkbox" checked={editing.defaultMaterials} onChange={e => setEditing({ ...editing, defaultMaterials: e.target.checked })} style={{ transform: 'scale(1.2)' }} />With materials</label></Field>
@@ -1101,6 +1131,20 @@ function ClientsView({ clients, saveClients, colors, allBookings, exportClientsE
             </div>
           </div>
         </div>
+      )}
+      {editing && showPinPicker && (
+        <LocationPickerModal
+          title="Pin Client Location"
+          initialLat={editing.lat}
+          initialLng={editing.lng}
+          initialAddress={editing.address}
+          onSave={(lat, lng, address) => {
+            setEditing({ ...editing, lat, lng, address: address || editing.address });
+            setShowPinPicker(false);
+          }}
+          onClose={() => setShowPinPicker(false)}
+          colors={colors}
+        />
       )}
     </div>
   );
@@ -2713,6 +2757,421 @@ function SettingsView({ companyInfo, saveCompanyInfo, colors }) {
           </Field>
         </div>
       </div>
+    </div>
+  );
+}
+
+function LocationPickerModal({ title, initialLat, initialLng, initialAddress, onSave, onClose, colors }) {
+  const [lat, setLat] = React.useState(initialLat || 24.4539);
+  const [lng, setLng] = React.useState(initialLng || 54.3773);
+  const [address, setAddress] = React.useState(initialAddress || '');
+  const [searching, setSearching] = React.useState(false);
+  const mapRef = React.useRef(null);
+  const mapInstanceRef = React.useRef(null);
+  const markerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!document.getElementById('leaflet-css')) {
+      const link = document.createElement('link');
+      link.id = 'leaflet-css';
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(link);
+    }
+    const initMap = async () => {
+      const L = (await import('leaflet')).default;
+      if (!mapRef.current || mapInstanceRef.current) return;
+      const map = L.map(mapRef.current).setView([lat, lng], initialLat ? 16 : 11);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+      const icon = L.divIcon({
+        className: 'custom-marker',
+        html: `<div style="background:#0F4C3A;color:white;width:36px;height:36px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.4);"><span style="transform:rotate(45deg);font-size:14px;">📍</span></div>`,
+        iconSize: [36, 36],
+        iconAnchor: [18, 36]
+      });
+      const marker = L.marker([lat, lng], { icon, draggable: true }).addTo(map);
+      marker.on('dragend', (e) => {
+        const p = e.target.getLatLng();
+        setLat(p.lat); setLng(p.lng);
+      });
+      map.on('click', (e) => {
+        marker.setLatLng(e.latlng);
+        setLat(e.latlng.lat); setLng(e.latlng.lng);
+      });
+      mapInstanceRef.current = map;
+      markerRef.current = marker;
+    };
+    initMap();
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+    };
+  }, []);
+
+  const searchAddress = async () => {
+    if (!address.trim()) return;
+    setSearching(true);
+    try {
+      const q = encodeURIComponent(address + ', Abu Dhabi, UAE');
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${q}&limit=1`);
+      const data = await res.json();
+      if (data && data[0]) {
+        const newLat = parseFloat(data[0].lat);
+        const newLng = parseFloat(data[0].lon);
+        setLat(newLat); setLng(newLng);
+        if (mapInstanceRef.current && markerRef.current) {
+          mapInstanceRef.current.setView([newLat, newLng], 16);
+          markerRef.current.setLatLng([newLat, newLng]);
+        }
+      } else {
+        alert('Location not found. Try a different address or click on the map directly.');
+      }
+    } catch (e) {
+      alert('Search failed. Click on the map to pick the location manually.');
+    }
+    setSearching(false);
+  };
+
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) { alert('Geolocation not supported'); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const newLat = pos.coords.latitude;
+        const newLng = pos.coords.longitude;
+        setLat(newLat); setLng(newLng);
+        if (mapInstanceRef.current && markerRef.current) {
+          mapInstanceRef.current.setView([newLat, newLng], 17);
+          markerRef.current.setLatLng([newLat, newLng]);
+        }
+      },
+      () => alert('Could not get current location. Try clicking on the map directly.'),
+      { enableHighAccuracy: true }
+    );
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '700px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+          <h3 className="display-font" style={{ margin: 0, fontSize: '20px', fontWeight: 700 }}>{title}</h3>
+          <button className="btn btn-sm" onClick={onClose} style={{ padding: '6px' }}><X size={14} /></button>
+        </div>
+        <p style={{ margin: '0 0 12px', fontSize: '12px', color: colors.ink + '99' }}>
+          Search by address, use your current location, or click directly on the map. Drag the pin to fine-tune.
+        </p>
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+          <input className="input" placeholder="Enter address to search..." value={address} onChange={e => setAddress(e.target.value)} onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), searchAddress())} style={{ flex: 1, minWidth: '200px' }} />
+          <button className="btn" onClick={searchAddress} disabled={searching}>
+            <Search size={14} /> {searching ? 'Searching...' : 'Search'}
+          </button>
+          <button className="btn" onClick={useCurrentLocation}>
+            <Navigation size={14} /> My location
+          </button>
+        </div>
+        <div ref={mapRef} style={{ height: '400px', width: '100%', borderRadius: '8px', border: `1px solid ${colors.border}`, marginBottom: '10px' }}></div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '14px' }}>
+          <div style={{ fontSize: '12px', color: colors.ink + 'AA' }}>
+            <strong>Pinned:</strong> <span className="mono">{lat.toFixed(5)}, {lng.toFixed(5)}</span>
+          </div>
+          <a href={`https://www.google.com/maps/?q=${lat},${lng}`} target="_blank" rel="noreferrer" style={{ fontSize: '12px', color: colors.accent, fontWeight: 600 }}>
+            🗺️ Verify in Google Maps →
+          </a>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={() => onSave(lat, lng, address)}><Check size={14} /> Save Pin</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWithCalc, allBookings }) {
+  const [editing, setEditing] = useState(null);
+  const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
+  const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+  const [filterCategory, setFilterCategory] = useState('');
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const yearOptions = [];
+  const now = new Date();
+  for (let y = now.getFullYear() - 2; y <= now.getFullYear() + 1; y++) yearOptions.push(y);
+
+  const emptyExpense = () => ({
+    id: 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+    date: new Date().toISOString().split('T')[0],
+    category: 'Materials',
+    amount: 0,
+    paymentMethod: 'Cash',
+    description: '',
+    vendor: '',
+    receipt: '',
+    notes: ''
+  });
+
+  const startNew = () => setEditing(emptyExpense());
+  const startEdit = (e) => setEditing({ ...e });
+
+  const save = () => {
+    if (!editing.amount || editing.amount <= 0) return alert('Enter a valid amount');
+    if (!editing.category) return alert('Pick a category');
+    const exists = expenses.find(e => e.id === editing.id);
+    saveExpenses(exists ? expenses.map(e => e.id === editing.id ? editing : e) : [...expenses, editing]);
+    setEditing(null);
+  };
+
+  const remove = (id) => { if (confirm('Delete this expense?')) saveExpenses(expenses.filter(e => e.id !== id)); };
+
+  // Filter
+  const filtered = expenses.filter(e => {
+    const d = new Date(e.date);
+    if (d.getMonth() !== filterMonth) return false;
+    if (d.getFullYear() !== filterYear) return false;
+    if (filterCategory && e.category !== filterCategory) return false;
+    return true;
+  }).sort((a, b) => b.date.localeCompare(a.date));
+
+  const monthTotal = filtered.reduce((s, e) => s + parseFloat(e.amount || 0), 0);
+
+  // Calculate revenue for the same period
+  const monthStart = new Date(filterYear, filterMonth, 1);
+  const monthEnd = new Date(filterYear, filterMonth + 1, 0);
+  const periodRevenue = allBookings.filter(b => {
+    const d = new Date(b.date);
+    return d >= monthStart && d <= monthEnd;
+  }).reduce((s, b) => s + (b.total || 0), 0);
+  const profit = periodRevenue - monthTotal;
+
+  // Breakdown by category
+  const byCategory = {};
+  EXPENSE_CATEGORIES.forEach(cat => byCategory[cat] = 0);
+  filtered.forEach(e => { byCategory[e.category] = (byCategory[e.category] || 0) + parseFloat(e.amount || 0); });
+  const categoryList = Object.entries(byCategory).filter(([_, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+
+  // Breakdown by payment method
+  const byMethod = {};
+  EXPENSE_PAYMENT_METHODS.forEach(m => byMethod[m] = 0);
+  filtered.forEach(e => { byMethod[e.paymentMethod] = (byMethod[e.paymentMethod] || 0) + parseFloat(e.amount || 0); });
+
+  const exportExpensesExcel = () => {
+    const headers = ['DATE', 'CATEGORY', 'DESCRIPTION', 'VENDOR', 'PAYMENT METHOD', 'AMOUNT (AED)', 'NOTES'];
+    const rows = filtered.map(e => [
+      e.date, e.category, e.description || '', e.vendor || '', e.paymentMethod, Number(parseFloat(e.amount || 0).toFixed(2)), e.notes || ''
+    ]);
+    rows.push(['', '', '', '', 'TOTAL', Number(monthTotal.toFixed(2)), '']);
+
+    const wb = XLSX.utils.book_new();
+
+    // Style helpers (reuse pattern from main app)
+    const greenHeader = {
+      font: { name: 'Calibri', sz: 12, bold: true, color: { rgb: 'FFFFFFFF' } },
+      fill: { patternType: 'solid', fgColor: { rgb: 'FF0F4C3A' } },
+      alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+      border: { top: { style: 'thin', color: { rgb: 'FF1A1A1A' } }, bottom: { style: 'thin', color: { rgb: 'FF1A1A1A' } }, left: { style: 'thin', color: { rgb: 'FF1A1A1A' } }, right: { style: 'thin', color: { rgb: 'FF1A1A1A' } } }
+    };
+    const titleStyle = { ...greenHeader, font: { ...greenHeader.font, sz: 16 } };
+    const cellStyle = {
+      font: { name: 'Calibri', sz: 11, color: { rgb: 'FF1A1A1A' } },
+      fill: { patternType: 'solid', fgColor: { rgb: 'FFFFFFFF' } },
+      alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+      border: { top: { style: 'thin', color: { rgb: 'FFD4CFC0' } }, bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } }, left: { style: 'thin', color: { rgb: 'FFD4CFC0' } }, right: { style: 'thin', color: { rgb: 'FFD4CFC0' } } }
+    };
+    const altCellStyle = { ...cellStyle, fill: { patternType: 'solid', fgColor: { rgb: 'FFFAF8F3' } } };
+    const totalStyle = {
+      font: { name: 'Calibri', sz: 12, bold: true, color: { rgb: 'FFFFFFFF' } },
+      fill: { patternType: 'solid', fgColor: { rgb: 'FF0F4C3A' } },
+      alignment: { horizontal: 'center', vertical: 'center' },
+      border: { top: { style: 'medium', color: { rgb: 'FF1A1A1A' } }, bottom: { style: 'medium', color: { rgb: 'FF1A1A1A' } }, left: { style: 'thin', color: { rgb: 'FF1A1A1A' } }, right: { style: 'thin', color: { rgb: 'FF1A1A1A' } } }
+    };
+
+    const ws = {};
+    const cols = headers.length;
+
+    // Title row
+    for (let c = 0; c < cols; c++) {
+      ws[XLSX.utils.encode_cell({ r: 0, c })] = { v: c === 0 ? `EXPENSES — ${months[filterMonth]} ${filterYear}` : '', t: 's', s: titleStyle };
+    }
+    // Subtitle
+    for (let c = 0; c < cols; c++) {
+      ws[XLSX.utils.encode_cell({ r: 1, c })] = { v: c === 0 ? `${filtered.length} entries · ${monthTotal.toFixed(2)} AED total` : '', t: 's', s: { ...titleStyle, font: { ...titleStyle.font, sz: 11, italic: true } } };
+    }
+    // Headers row 3
+    headers.forEach((h, c) => {
+      ws[XLSX.utils.encode_cell({ r: 3, c })] = { v: h, t: 's', s: greenHeader };
+    });
+    // Data rows
+    rows.forEach((row, rIdx) => {
+      const r = rIdx + 4;
+      const isTotalRow = rIdx === rows.length - 1;
+      const alt = rIdx % 2 === 1;
+      row.forEach((cell, c) => {
+        const style = isTotalRow ? totalStyle : (alt ? altCellStyle : cellStyle);
+        const isNumber = typeof cell === 'number';
+        ws[XLSX.utils.encode_cell({ r, c })] = { v: cell, t: isNumber ? 'n' : 's', s: style };
+      });
+    });
+
+    ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows.length + 3, c: cols - 1 } });
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: cols - 1 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: cols - 1 } }
+    ];
+    ws['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 30 }, { wch: 22 }, { wch: 18 }, { wch: 14 }, { wch: 28 }];
+    ws['!rows'] = [{ hpt: 32 }, { hpt: 20 }, { hpt: 8 }, { hpt: 24 }];
+    XLSX.utils.book_append_sheet(wb, ws, 'Expenses');
+    XLSX.writeFile(wb, `expenses_${months[filterMonth]}_${filterYear}.xlsx`);
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Expenses</h2>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Track all business expenses · {expenses.length} total entries</p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {filtered.length > 0 && <button className="btn" onClick={exportExpensesExcel}><FileSpreadsheet size={14} /> Excel</button>}
+          <button className="btn btn-primary" onClick={startNew}><Plus size={14} /> New Expense</button>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '14px 18px', marginBottom: '16px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: '12px', fontWeight: 600, color: colors.ink + 'AA', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Filter:</span>
+        <select className="select" value={filterMonth} onChange={e => setFilterMonth(parseInt(e.target.value))} style={{ width: 'auto' }}>
+          {months.map((m, i) => <option key={i} value={i}>{m}</option>)}
+        </select>
+        <select className="select" value={filterYear} onChange={e => setFilterYear(parseInt(e.target.value))} style={{ width: 'auto' }}>
+          {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+        </select>
+        <select className="select" value={filterCategory} onChange={e => setFilterCategory(e.target.value)} style={{ width: 'auto' }}>
+          <option value="">All categories</option>
+          {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+
+      {/* Stats */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '20px' }}>
+        <StatCard icon={<Wallet size={18} />} label="Expenses" value={`${monthTotal.toFixed(0)} AED`} color={colors.rust} colors={colors} />
+        <StatCard icon={<DollarSign size={18} />} label="Revenue" value={`${periodRevenue.toFixed(0)} AED`} color={colors.accent} colors={colors} />
+        <StatCard icon={<TrendingUp size={18} />} label={profit >= 0 ? 'Profit' : 'Loss'} value={`${profit.toFixed(0)} AED`} color={profit >= 0 ? colors.accent : colors.rust} colors={colors} />
+        <StatCard icon={<FileText size={18} />} label="Entries" value={filtered.length} color={colors.ink} colors={colors} />
+      </div>
+
+      {/* Breakdown by category */}
+      {categoryList.length > 0 && (
+        <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px', marginBottom: '20px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>By Category · {months[filterMonth]} {filterYear}</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {categoryList.map(([cat, amt]) => (
+              <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '13px', fontWeight: 600, minWidth: '180px' }}>{cat}</span>
+                <div style={{ flex: 1, background: colors.soft, height: '20px', borderRadius: '4px', overflow: 'hidden' }}>
+                  <div style={{ width: `${(amt / monthTotal) * 100}%`, height: '100%', background: `linear-gradient(90deg, ${colors.rust}, ${colors.gold})` }}></div>
+                </div>
+                <span className="mono" style={{ minWidth: '90px', textAlign: 'right', fontWeight: 700, color: colors.rust }}>{amt.toFixed(0)} AED</span>
+                <span style={{ minWidth: '50px', textAlign: 'right', fontSize: '12px', color: colors.ink + '99' }}>{((amt / monthTotal) * 100).toFixed(0)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Expenses table */}
+      <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}>
+        {filtered.length === 0 ? (
+          <div style={{ padding: '60px 20px', textAlign: 'center', color: colors.ink + '99' }}>
+            <Wallet size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
+            <h3 style={{ margin: '0 0 8px' }}>No expenses for {months[filterMonth]} {filterYear}</h3>
+            <p style={{ fontSize: '13px', margin: '0 0 16px' }}>Click "New Expense" to add your first one.</p>
+            <button className="btn btn-primary" onClick={startNew}><Plus size={14} /> Add Expense</button>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+              <thead>
+                <tr style={{ background: colors.soft }}>
+                  <Th>Date</Th><Th>Category</Th><Th>Description</Th><Th>Vendor</Th>
+                  <Th>Payment</Th><Th style={{ textAlign: 'right' }}>Amount (AED)</Th><Th></Th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(e => (
+                  <tr key={e.id} style={{ borderTop: `1px solid ${colors.border}` }}>
+                    <Td className="mono" style={{ fontSize: '12px' }}>{new Date(e.date).toLocaleDateString('en-GB')}</Td>
+                    <Td><span className="badge" style={{ background: colors.cellMaterials, color: colors.accent }}>{e.category}</span></Td>
+                    <Td>{e.description || <span style={{ color: colors.ink + '66' }}>—</span>}</Td>
+                    <Td>{e.vendor || <span style={{ color: colors.ink + '66' }}>—</span>}</Td>
+                    <Td><span className="badge" style={{ background: colors.soft }}>{e.paymentMethod}</span></Td>
+                    <Td className="mono" style={{ textAlign: 'right', fontWeight: 700, color: colors.rust }}>{parseFloat(e.amount || 0).toFixed(2)}</Td>
+                    <Td>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button className="btn btn-sm" onClick={() => startEdit(e)} style={{ padding: '4px 8px' }}><Edit2 size={12} /></button>
+                        <button className="btn btn-danger btn-sm" onClick={() => remove(e.id)} style={{ padding: '4px 8px' }}><Trash2 size={12} /></button>
+                      </div>
+                    </Td>
+                  </tr>
+                ))}
+                <tr style={{ background: colors.soft, fontWeight: 700 }}>
+                  <Td colSpan="5" style={{ textAlign: 'right' }}>TOTAL</Td>
+                  <Td className="mono" style={{ textAlign: 'right', color: colors.rust, fontSize: '15px' }}>{monthTotal.toFixed(2)}</Td>
+                  <Td></Td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {editing && (
+        <div className="modal-overlay" onClick={() => setEditing(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h3 className="display-font" style={{ margin: 0, fontSize: '22px', fontWeight: 700 }}>{expenses.find(e => e.id === editing.id) ? 'Edit Expense' : 'New Expense'}</h3>
+              <button className="btn btn-sm" onClick={() => setEditing(null)} style={{ padding: '6px' }}><X size={14} /></button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <Field label="Date *">
+                  <input className="input" type="date" value={editing.date} onChange={e => setEditing({ ...editing, date: e.target.value })} />
+                </Field>
+                <Field label="Amount (AED) *">
+                  <input className="input" type="number" step="0.01" value={editing.amount} onChange={e => setEditing({ ...editing, amount: e.target.value })} placeholder="0.00" />
+                </Field>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <Field label="Category *">
+                  <select className="select" value={editing.category} onChange={e => setEditing({ ...editing, category: e.target.value })}>
+                    {EXPENSE_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+                  </select>
+                </Field>
+                <Field label="Payment Method *">
+                  <select className="select" value={editing.paymentMethod} onChange={e => setEditing({ ...editing, paymentMethod: e.target.value })}>
+                    {EXPENSE_PAYMENT_METHODS.map(m => <option key={m}>{m}</option>)}
+                  </select>
+                </Field>
+              </div>
+              <Field label="Description">
+                <input className="input" value={editing.description} onChange={e => setEditing({ ...editing, description: e.target.value })} placeholder="What was this expense for?" />
+              </Field>
+              <Field label="Vendor / Paid To">
+                <input className="input" value={editing.vendor} onChange={e => setEditing({ ...editing, vendor: e.target.value })} placeholder="Company / person name" />
+              </Field>
+              <Field label="Receipt / Reference No.">
+                <input className="input" value={editing.receipt} onChange={e => setEditing({ ...editing, receipt: e.target.value })} placeholder="Optional reference number" />
+              </Field>
+              <Field label="Notes">
+                <textarea className="input" rows="2" value={editing.notes} onChange={e => setEditing({ ...editing, notes: e.target.value })} style={{ resize: 'vertical' }} />
+              </Field>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '20px' }}>
+              <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={save}><Save size={14} /> Save Expense</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
