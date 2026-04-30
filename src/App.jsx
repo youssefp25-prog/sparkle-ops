@@ -234,8 +234,6 @@ export default function CleaningApp() {
     a.href = url; a.download = `report_${date}.csv`; a.click();
   };
 
-  const printPage = () => window.print();
-
   // ===== EXCEL EXPORT FUNCTIONS (matching deployment grid style) =====
   // Color palette matching the app:
   //   Green header: #0F4C3A
