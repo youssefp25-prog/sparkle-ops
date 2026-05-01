@@ -933,115 +933,284 @@ export default function CleaningApp() {
     showStatus(`✓ ${monthName} report downloaded`);
   };
 
+  // ===== MEGA EXCEL EXPORT (with date range) =====
+  const [showExportRange, setShowExportRange] = useState(false);
+
   const exportEverythingExcel = () => {
+    setShowExportRange(true);
+  };
+
+  const performMegaExport = (rangeStart, rangeEnd) => {
     const wb = XLSX.utils.book_new();
+    const startDate = rangeStart ? new Date(rangeStart) : null;
+    const endDate = rangeEnd ? new Date(rangeEnd) : null;
+    if (endDate) endDate.setHours(23, 59, 59);
 
-    // Sheet 1: Today
-    if (bookingsWithCalc.length > 0) {
-      const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MAT.', 'HRS', 'RATE', 'TOTAL (AED)', 'PAY', 'STATUS'];
-      const dayNum = new Date(date).getDate();
-      const rows = bookingsWithCalc.map(b => [
-        dayNum, b.cleaner, b.timing, b.clientName, b.location, b.phone || '',
-        b.withMaterials ? 'Yes' : 'No', Number(b.hours), Number(b.pricePerHour),
-        Number(b.total.toFixed(2)), b.paymentType, b.paymentStatus || 'PENDING'
-      ]);
-      rows.push(['', '', '', '', '', '', 'TOTAL', Number(totalHours.toFixed(1)), '', Number(totalRevenue.toFixed(2)), '', '']);
-      const ws = buildStyledSheet('TODAY — DAILY REPORT', formatLongDate(date), headers, rows, [6, 12, 12, 22, 32, 16, 8, 8, 8, 14, 10, 12], {
-        totalRow: true, statusCol: 11, materialsCol: 6, priceCol: 9
+    const inRange = (dateStr) => {
+      if (!startDate && !endDate) return true;
+      const d = new Date(dateStr);
+      if (startDate && d < startDate) return false;
+      if (endDate && d > endDate) return false;
+      return true;
+    };
+
+    const filteredBookings = allBookingsWithDate.filter(b => inRange(b.date));
+    const filteredExpenses = expenses.filter(e => inRange(e.date));
+
+    const periodLabel = (startDate && endDate)
+      ? `${startDate.toLocaleDateString('en-GB')} → ${endDate.toLocaleDateString('en-GB')}`
+      : (startDate ? `From ${startDate.toLocaleDateString('en-GB')}` : (endDate ? `Until ${endDate.toLocaleDateString('en-GB')}` : 'All time'));
+
+    // ===== SHEET 1: DASHBOARD =====
+    const totalRev = filteredBookings.reduce((s, b) => s + (b.total || 0), 0);
+    const totalExp = filteredExpenses.reduce((s, e) => s + parseFloat(e.amount || 0), 0);
+    const profit = totalRev - totalExp;
+    const totalJobs = filteredBookings.length;
+    const totalHrs = filteredBookings.reduce((s, b) => s + (b.hours || 0), 0);
+    const paidJobs = filteredBookings.filter(b => b.paymentStatus === 'PAID').length;
+    const pendingJobs = filteredBookings.filter(b => b.paymentStatus !== 'PAID').length;
+    const cashTotal = filteredBookings.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0);
+    const onlineTotal = filteredBookings.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0);
+    const paidAmt = filteredBookings.filter(b => b.paymentStatus === 'PAID').reduce((s, b) => s + (b.total || 0), 0);
+    const pendingAmt = filteredBookings.filter(b => b.paymentStatus !== 'PAID').reduce((s, b) => s + (b.total || 0), 0);
+
+    // Top cleaners
+    const cleanerStats = {};
+    CLEANERS.forEach(c => cleanerStats[c] = { jobs: 0, hours: 0, revenue: 0 });
+    filteredBookings.forEach(b => {
+      if (cleanerStats[b.cleaner]) {
+        cleanerStats[b.cleaner].jobs += 1;
+        cleanerStats[b.cleaner].hours += b.hours || 0;
+        cleanerStats[b.cleaner].revenue += b.total || 0;
+      }
+    });
+    const topCleaners = Object.entries(cleanerStats).filter(([_, s]) => s.jobs > 0).sort((a, b) => b[1].revenue - a[1].revenue);
+
+    // Top clients
+    const clientStats = {};
+    filteredBookings.forEach(b => {
+      const key = b.clientName || 'Unknown';
+      if (!clientStats[key]) clientStats[key] = { visits: 0, revenue: 0 };
+      clientStats[key].visits += 1;
+      clientStats[key].revenue += b.total || 0;
+    });
+    const topClients = Object.entries(clientStats).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 10);
+
+    // Expenses by category
+    const expByCategory = {};
+    filteredExpenses.forEach(e => { expByCategory[e.category] = (expByCategory[e.category] || 0) + parseFloat(e.amount || 0); });
+    const topCategories = Object.entries(expByCategory).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+    // Build dashboard sheet
+    const dashRows = [
+      ['DASHBOARD — ' + (companyInfo.name || 'AR Cleaning Services'), '', '', ''],
+      ['Period: ' + periodLabel, '', '', ''],
+      ['Generated: ' + new Date().toLocaleString('en-GB'), '', '', ''],
+      ['', '', '', ''],
+      ['💰 FINANCIAL OVERVIEW', '', '', ''],
+      ['Total Revenue', Number(totalRev.toFixed(2)) + ' AED', '', ''],
+      ['Total Expenses', Number(totalExp.toFixed(2)) + ' AED', '', ''],
+      [profit >= 0 ? 'Net Profit' : 'Net Loss', Number(profit.toFixed(2)) + ' AED', '', ''],
+      ['', '', '', ''],
+      ['📊 OPERATIONS', '', '', ''],
+      ['Total Jobs', totalJobs, '', ''],
+      ['Total Hours Worked', Number(totalHrs.toFixed(1)), '', ''],
+      ['Active Cleaners', Object.values(cleanerStats).filter(s => s.jobs > 0).length, '', ''],
+      ['Unique Clients', Object.keys(clientStats).length, '', ''],
+      ['', '', '', ''],
+      ['💳 PAYMENTS', '', '', ''],
+      ['Paid Jobs', paidJobs + ' jobs', Number(paidAmt.toFixed(2)) + ' AED', ''],
+      ['Pending Jobs', pendingJobs + ' jobs', Number(pendingAmt.toFixed(2)) + ' AED', ''],
+      ['Cash Revenue', '', Number(cashTotal.toFixed(2)) + ' AED', ''],
+      ['Online Revenue', '', Number(onlineTotal.toFixed(2)) + ' AED', ''],
+      ['', '', '', ''],
+      ['🏆 TOP CLEANERS (by revenue)', 'Jobs', 'Hours', 'Revenue (AED)'],
+    ];
+    topCleaners.forEach(([name, s]) => {
+      dashRows.push([name, s.jobs, Number(s.hours.toFixed(1)), Number(s.revenue.toFixed(2))]);
+    });
+    dashRows.push(['', '', '', '']);
+    dashRows.push(['🌟 TOP 10 CLIENTS (by revenue)', 'Visits', '', 'Revenue (AED)']);
+    topClients.forEach(([name, s]) => {
+      dashRows.push([name, s.visits, '', Number(s.revenue.toFixed(2))]);
+    });
+    dashRows.push(['', '', '', '']);
+    dashRows.push(['💸 TOP EXPENSE CATEGORIES', '', '', 'Amount (AED)']);
+    topCategories.forEach(([cat, amt]) => {
+      dashRows.push([cat, '', '', Number(amt.toFixed(2))]);
+    });
+
+    // Build Dashboard sheet with styling
+    const dashWs = {};
+    const headerStyle = {
+      font: { name: 'Calibri', sz: 14, bold: true, color: { rgb: 'FFFFFFFF' } },
+      fill: { patternType: 'solid', fgColor: { rgb: 'FF0F4C3A' } },
+      alignment: { horizontal: 'center', vertical: 'center' },
+      border: { top: { style: 'medium', color: { rgb: 'FF1A1A1A' } }, bottom: { style: 'medium', color: { rgb: 'FF1A1A1A' } }, left: { style: 'thin', color: { rgb: 'FF1A1A1A' } }, right: { style: 'thin', color: { rgb: 'FF1A1A1A' } } }
+    };
+    const sectionStyle = {
+      font: { name: 'Calibri', sz: 12, bold: true, color: { rgb: 'FFFFFFFF' } },
+      fill: { patternType: 'solid', fgColor: { rgb: 'FF0F4C3A' } },
+      alignment: { horizontal: 'left', vertical: 'center', indent: 1 },
+      border: { top: { style: 'thin', color: { rgb: 'FFD4CFC0' } }, bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } } }
+    };
+    const labelStyle = {
+      font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: 'FF1A1A1A' } },
+      fill: { patternType: 'solid', fgColor: { rgb: 'FFFAF8F3' } },
+      alignment: { horizontal: 'left', vertical: 'center', indent: 1 },
+      border: { top: { style: 'thin', color: { rgb: 'FFD4CFC0' } }, bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } }, left: { style: 'thin', color: { rgb: 'FFD4CFC0' } }, right: { style: 'thin', color: { rgb: 'FFD4CFC0' } } }
+    };
+    const valueStyle = {
+      font: { name: 'Calibri', sz: 11, color: { rgb: 'FF1A1A1A' } },
+      fill: { patternType: 'solid', fgColor: { rgb: 'FFFFFFFF' } },
+      alignment: { horizontal: 'right', vertical: 'center', indent: 1 },
+      border: { top: { style: 'thin', color: { rgb: 'FFD4CFC0' } }, bottom: { style: 'thin', color: { rgb: 'FFD4CFC0' } }, left: { style: 'thin', color: { rgb: 'FFD4CFC0' } }, right: { style: 'thin', color: { rgb: 'FFD4CFC0' } } }
+    };
+    const titleStyle = {
+      font: { name: 'Calibri', sz: 18, bold: true, color: { rgb: 'FFFFFFFF' } },
+      fill: { patternType: 'solid', fgColor: { rgb: 'FF0F4C3A' } },
+      alignment: { horizontal: 'center', vertical: 'center' }
+    };
+    const subtitleStyle = {
+      font: { name: 'Calibri', sz: 11, italic: true, color: { rgb: 'FFFFFFFF' } },
+      fill: { patternType: 'solid', fgColor: { rgb: 'FF0F4C3A' } },
+      alignment: { horizontal: 'center', vertical: 'center' }
+    };
+
+    dashRows.forEach((row, rIdx) => {
+      const isTitle = rIdx === 0;
+      const isPeriod = rIdx === 1;
+      const isGen = rIdx === 2;
+      const isSection = typeof row[0] === 'string' && (row[0].startsWith('💰') || row[0].startsWith('📊') || row[0].startsWith('💳') || row[0].startsWith('🏆') || row[0].startsWith('🌟') || row[0].startsWith('💸'));
+      const isEmpty = row.every(c => c === '');
+      row.forEach((cell, c) => {
+        let style;
+        if (isTitle) style = titleStyle;
+        else if (isPeriod || isGen) style = subtitleStyle;
+        else if (isSection) style = sectionStyle;
+        else if (isEmpty) style = { fill: { patternType: 'solid', fgColor: { rgb: 'FFFFFFFF' } } };
+        else if (c === 0) style = labelStyle;
+        else style = valueStyle;
+        dashWs[XLSX.utils.encode_cell({ r: rIdx, c })] = {
+          v: cell,
+          t: typeof cell === 'number' ? 'n' : 's',
+          s: style
+        };
       });
-      XLSX.utils.book_append_sheet(wb, ws, 'Today');
-    }
+    });
+    dashWs['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: dashRows.length - 1, c: 3 } });
+    dashWs['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 3 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 3 } }
+    ];
+    // Merge section header rows
+    dashRows.forEach((row, rIdx) => {
+      const isSection = typeof row[0] === 'string' && (row[0].startsWith('💰') || row[0].startsWith('📊') || row[0].startsWith('💳'));
+      if (isSection) dashWs['!merges'].push({ s: { r: rIdx, c: 0 }, e: { r: rIdx, c: 3 } });
+    });
+    dashWs['!cols'] = [{ wch: 36 }, { wch: 18 }, { wch: 18 }, { wch: 18 }];
+    dashWs['!rows'] = [{ hpt: 32 }, { hpt: 22 }, { hpt: 18 }];
+    XLSX.utils.book_append_sheet(wb, dashWs, '📊 Dashboard');
 
-    // Sheet 2: All History
-    if (allBookingsWithDate.length > 0) {
+    // ===== SHEET 2: BOOKINGS =====
+    if (filteredBookings.length > 0) {
       const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MAT.', 'HRS', 'RATE', 'TOTAL (AED)', 'PAY', 'STATUS'];
-      const rows = allBookingsWithDate.map(b => [
-        b.date, b.cleaner, b.timing, b.clientName, b.location, b.phone || '',
-        b.withMaterials ? 'Yes' : 'No', Number(b.hours), Number(b.pricePerHour),
+      const rows = filteredBookings.map(b => [
+        b.date, b.cleaner, b.timing, b.clientName, b.location || '', b.phone || '',
+        b.withMaterials ? 'Yes' : 'No', Number((b.hours || 0).toFixed(1)), Number(b.pricePerHour),
         Number((b.total || 0).toFixed(2)), b.paymentType, b.paymentStatus || 'PENDING'
       ]);
-      const ws = buildStyledSheet('ALL HISTORY', `${allBookingsWithDate.length} total jobs`, headers, rows, [12, 12, 12, 22, 32, 16, 8, 8, 8, 14, 10, 12], {
-        statusCol: 11, materialsCol: 6, priceCol: 9
+      rows.push(['', '', '', '', '', '', 'TOTAL', Number(totalHrs.toFixed(1)), '', Number(totalRev.toFixed(2)), '', '']);
+      const ws = buildStyledSheet('ALL BOOKINGS', periodLabel, headers, rows, [12, 12, 12, 22, 32, 16, 8, 8, 8, 14, 10, 12], {
+        totalRow: true, statusCol: 11, materialsCol: 6, priceCol: 9
       });
-      XLSX.utils.book_append_sheet(wb, ws, 'History');
+      XLSX.utils.book_append_sheet(wb, ws, 'Bookings');
     }
 
-    // Sheet 3: Clients
+    // ===== SHEET 3: CLIENTS =====
     if (clients.length > 0) {
-      const headers = ['NAME', 'PHONE', 'ADDRESS', 'RATE/HR', 'MAT.', 'VISITS', 'TOTAL REVENUE (AED)', 'NOTES'];
-      const rows = clients.map(c => {
-        const visits = allBookingsWithDate.filter(b => b.clientId === c.id);
-        return [
-          c.name, c.phone || '', c.address || '', Number(c.defaultRate),
-          c.defaultMaterials ? 'Yes' : 'No', visits.length,
-          Number(visits.reduce((s, b) => s + (b.total || 0), 0).toFixed(2)), c.notes || ''
-        ];
-      });
-      const ws = buildStyledSheet('CLIENT DATABASE', `${clients.length} clients`, headers, rows, [22, 18, 38, 10, 8, 10, 18, 28], {
-        materialsCol: 4, priceCol: 6
-      });
+      const headers = ['NAME', 'PHONE', 'ADDRESS', 'PINNED LOCATION', 'DEFAULT RATE', 'MATERIALS', 'NOTES'];
+      const rows = clients.map(c => [
+        c.name, c.phone || '', c.address || '',
+        c.lat ? `${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}` : '',
+        Number(c.defaultRate || 25), c.defaultMaterials ? 'Yes' : 'No', c.notes || ''
+      ]);
+      const ws = buildStyledSheet('CLIENTS DATABASE', `${clients.length} clients`, headers, rows, [22, 16, 32, 22, 14, 12, 28], {});
       XLSX.utils.book_append_sheet(wb, ws, 'Clients');
     }
 
-    // Sheet 4: Contracts
+    // ===== SHEET 4: CONTRACTS =====
     if (contracts.length > 0) {
-      const headers = ['CLIENT', 'CLEANER', 'DAYS', 'TIMING', 'RATE/HR', 'MAT.', 'PAYMENT', 'STATUS'];
+      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const headers = ['CLIENT', 'CLEANER', 'TIMING', 'DAYS', 'RATE/HR', 'MATERIALS', 'PAY TYPE', 'STATUS'];
       const rows = contracts.map(c => [
-        c.clientName, c.cleaner, c.daysOfWeek.map(d => DAYS[d]).join(', '),
-        c.timing, Number(c.pricePerHour), c.withMaterials ? 'Yes' : 'No',
-        c.paymentType, c.active ? 'Active' : 'Paused'
+        c.clientName, c.cleaner, c.timing,
+        (c.daysOfWeek || []).map(d => dayNames[d]).join(', '),
+        Number(c.pricePerHour), c.withMaterials ? 'Yes' : 'No', c.paymentType,
+        c.active ? 'ACTIVE' : 'PAUSED'
       ]);
-      const ws = buildStyledSheet('RECURRING CONTRACTS', `${contracts.filter(c => c.active).length} active`, headers, rows, [22, 12, 26, 14, 10, 8, 12, 10], {
-        materialsCol: 5, priceCol: 4
-      });
+      const ws = buildStyledSheet('CONTRACTS', `${contracts.length} contracts`, headers, rows, [22, 12, 12, 22, 10, 12, 12, 12], { statusCol: 7 });
       XLSX.utils.book_append_sheet(wb, ws, 'Contracts');
     }
 
-    // Sheet 5: Earnings (all-time)
-    const earnHeaders = ['CLEANER', 'JOBS', 'HOURS', 'CLIENTS', 'CASH (AED)', 'ONLINE (AED)', 'TOTAL (AED)'];
-    const earnRows = CLEANERS.map(name => {
-      const jobs = allBookingsWithDate.filter(b => b.cleaner === name);
-      return [
-        name, jobs.length,
-        Number(jobs.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1)),
-        new Set(jobs.map(b => b.clientName)).size,
-        Number(jobs.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
-        Number(jobs.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
-        Number(jobs.reduce((s, b) => s + (b.total || 0), 0).toFixed(2))
-      ];
-    });
-    earnRows.push([
-      'GRAND TOTAL', allBookingsWithDate.length,
-      Number(allBookingsWithDate.reduce((s, b) => s + (b.hours || 0), 0).toFixed(1)),
-      new Set(allBookingsWithDate.map(b => b.clientName)).size,
-      Number(allBookingsWithDate.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
-      Number(allBookingsWithDate.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
-      Number(allBookingsWithDate.reduce((s, b) => s + (b.total || 0), 0).toFixed(2))
-    ]);
-    const wsEarn = buildStyledSheet('CLEANER EARNINGS — ALL TIME', `${allBookingsWithDate.length} total jobs`, earnHeaders, earnRows, [16, 8, 10, 10, 14, 14, 14], { totalRow: true, priceCol: 6 });
-    XLSX.utils.book_append_sheet(wb, wsEarn, 'Earnings');
+    // ===== SHEET 5: EXPENSES =====
+    if (filteredExpenses.length > 0) {
+      const headers = ['DATE', 'CATEGORY', 'DESCRIPTION', 'VENDOR', 'PAYMENT METHOD', 'AMOUNT (AED)', 'NOTES'];
+      const rows = filteredExpenses.sort((a, b) => b.date.localeCompare(a.date)).map(e => [
+        e.date, e.category, e.description || '', e.vendor || '', e.paymentMethod,
+        Number(parseFloat(e.amount || 0).toFixed(2)), e.notes || ''
+      ]);
+      rows.push(['', '', '', '', 'TOTAL', Number(totalExp.toFixed(2)), '']);
+      const ws = buildStyledSheet('EXPENSES', periodLabel, headers, rows, [12, 22, 30, 22, 18, 14, 28], { totalRow: true });
+      XLSX.utils.book_append_sheet(wb, ws, 'Expenses');
+    }
 
-    // Sheet 6: Pending
-    const pending = allBookingsWithDate.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
-    if (pending.length > 0) {
-      const todaySafe = new Date().setHours(0, 0, 0, 0);
-      const headers = ['DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'AMOUNT (AED)', 'PAY', 'DAYS OVERDUE'];
-      const rows = pending.map(b => {
-        const overdue = Math.floor((todaySafe - new Date(b.date).setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24));
-        return [
-          b.date, b.clientName, b.phone || '', b.location, b.cleaner, b.timing,
-          Number(b.total.toFixed(2)), b.paymentType, overdue > 0 ? overdue : 0
-        ];
+    // ===== SHEET 6: EARNINGS BY CLEANER =====
+    if (topCleaners.length > 0) {
+      const headers = ['CLEANER', 'JOBS', 'HOURS', 'REVENUE (AED)', 'AVG PER JOB'];
+      const rows = topCleaners.map(([name, s]) => [
+        name, s.jobs, Number(s.hours.toFixed(1)), Number(s.revenue.toFixed(2)),
+        Number((s.revenue / s.jobs).toFixed(2))
+      ]);
+      const ws = buildStyledSheet('EARNINGS BY CLEANER', periodLabel, headers, rows, [16, 10, 10, 16, 14], {});
+      XLSX.utils.book_append_sheet(wb, ws, 'Earnings');
+    }
+
+    // ===== SHEET 7: PENDING PAYMENTS =====
+    const pendingFiltered = filteredBookings.filter(b => b.paymentStatus !== 'PAID');
+    if (pendingFiltered.length > 0) {
+      const today = new Date();
+      const headers = ['DATE', 'CLIENT', 'PHONE', 'CLEANER', 'AMOUNT (AED)', 'DAYS OVERDUE'];
+      const rows = pendingFiltered.sort((a, b) => a.date.localeCompare(b.date)).map(b => {
+        const overdue = Math.floor((today - new Date(b.date)) / (1000 * 60 * 60 * 24));
+        return [b.date, b.clientName, b.phone || '', b.cleaner, Number((b.total || 0).toFixed(2)), overdue];
       });
-      const totalOwed = pending.reduce((s, b) => s + b.total, 0);
-      rows.push(['', '', '', '', '', 'TOTAL OWED', Number(totalOwed.toFixed(2)), '', '']);
-      const ws = buildStyledSheet('PENDING PAYMENTS', `${pending.length} unpaid · ${totalOwed.toFixed(2)} AED owed`, headers, rows, [12, 22, 18, 32, 14, 12, 14, 10, 14], { totalRow: true, priceCol: 6 });
+      rows.push(['', '', '', 'TOTAL PENDING', Number(pendingAmt.toFixed(2)), '']);
+      const ws = buildStyledSheet('PENDING PAYMENTS', `${pendingFiltered.length} unpaid · ${pendingAmt.toFixed(0)} AED`, headers, rows, [12, 22, 16, 12, 14, 14], { totalRow: true });
       XLSX.utils.book_append_sheet(wb, ws, 'Pending');
     }
 
-    XLSX.writeFile(wb, `sparkle_operations_full_${new Date().toISOString().split('T')[0]}.xlsx`);
-    showStatus('✓ Full export downloaded');
+    // ===== SHEET 8: CLEANER HOMES =====
+    const homeEntries = Object.entries(cleanerHomes).filter(([_, h]) => h && h.address);
+    if (homeEntries.length > 0) {
+      const headers = ['CLEANER', 'HOME ADDRESS', 'PINNED LOCATION'];
+      const rows = homeEntries.map(([cleaner, h]) => [
+        cleaner, h.address || '', h.lat ? `${h.lat.toFixed(5)}, ${h.lng.toFixed(5)}` : ''
+      ]);
+      const ws = buildStyledSheet('CLEANER HOMES', `${homeEntries.length} addresses`, headers, rows, [16, 32, 22], {});
+      XLSX.utils.book_append_sheet(wb, ws, 'Cleaner Homes');
+    }
+
+    // ===== SAVE FILE =====
+    const fileName = startDate || endDate
+      ? `${(companyInfo.name || 'AR_Cleaning').replace(/\s+/g, '_')}_full_export_${rangeStart || 'start'}_to_${rangeEnd || 'end'}.xlsx`
+      : `${(companyInfo.name || 'AR_Cleaning').replace(/\s+/g, '_')}_full_export_alltime.xlsx`;
+    XLSX.writeFile(wb, fileName);
+    showStatus('✓ Mega export downloaded!');
+    setShowExportRange(false);
   };
+
 
   const printPage = () => window.print();
 
@@ -1084,9 +1253,14 @@ export default function CleaningApp() {
 
       <div className="no-print" style={{ background: colors.paper, borderBottom: `1px solid ${colors.border}`, padding: '20px 32px', position: 'sticky', top: 0, zIndex: 10 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <h1 className="display-font" style={{ margin: 0, fontSize: '28px', fontWeight: 800, color: colors.accent }}>Sparkle Operations</h1>
-            <p style={{ margin: '4px 0 0', fontSize: '13px', color: colors.ink + '99' }}>Daily deployment, reporting, clients & earnings · Abu Dhabi</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            {companyInfo.logoDataUrl && (
+              <img src={companyInfo.logoDataUrl} alt="logo" style={{ height: '54px', width: '54px', objectFit: 'contain', borderRadius: '8px', background: 'white', padding: '4px', border: `1px solid ${colors.border}` }} />
+            )}
+            <div>
+              <h1 className="display-font" style={{ margin: 0, fontSize: '28px', fontWeight: 800, color: colors.accent, letterSpacing: '-0.01em' }}>{companyInfo.name || 'AR Cleaning Services'}</h1>
+              <p style={{ margin: '4px 0 0', fontSize: '13px', color: colors.ink + '99' }}>Daily operations · clients · earnings · expenses · {companyInfo.phone || 'Abu Dhabi'}</p>
+            </div>
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             {statusMsg && <span style={{ fontSize: '13px', color: colors.accent, fontWeight: 600 }}>{statusMsg}</span>}
@@ -1128,6 +1302,7 @@ export default function CleaningApp() {
 
       {clientPickerFor && <ClientPickerModal clients={clients} onPick={(c) => applyClientToBooking(clientPickerFor, c)} onClose={() => setClientPickerFor(null)} colors={colors} />}
       {bookingPinFor && <LocationPickerModal title="Pin Booking Location" initialLat={bookings.find(b => b.id === bookingPinFor)?.lat} initialLng={bookings.find(b => b.id === bookingPinFor)?.lng} initialAddress={bookings.find(b => b.id === bookingPinFor)?.location || ''} onSave={(lat, lng, address) => { updateBooking(bookingPinFor, 'lat', lat); updateBooking(bookingPinFor, 'lng', lng); if (address) updateBooking(bookingPinFor, 'location', address); setBookingPinFor(null); }} onClose={() => setBookingPinFor(null)} colors={colors} />}
+      {showExportRange && <ExportRangeModal onExport={performMegaExport} onClose={() => setShowExportRange(false)} colors={colors} allBookings={allBookingsWithDate} expenses={expenses} />}
     </div>
   );
 }
@@ -1327,12 +1502,24 @@ function ClientsView({ clients, saveClients, colors, allBookings, exportClientsE
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <Field label="Name *"><input className="input" value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} /></Field>
               <Field label="Phone"><input className="input" value={editing.phone} onChange={e => setEditing({ ...editing, phone: e.target.value })} placeholder="+971 50 ..." /></Field>
-              <Field label="Address & Location">
-                <textarea className="input" value={editing.address} onChange={e => setEditing({ ...editing, address: e.target.value })} placeholder="Apt 101 Building, Area" rows="2" style={{ resize: 'vertical', marginBottom: '4px' }} />
-                <button type="button" className="btn btn-sm" onClick={() => setShowPinPicker(true)} style={{ background: editing.lat ? colors.accentLight : 'white', borderColor: editing.lat ? colors.accent : colors.border, fontSize: '11px' }}>
-                  <MapPin size={12} style={{ color: editing.lat ? colors.accent : colors.ink + '99' }} />
-                  {editing.lat ? `Pinned (${editing.lat.toFixed(4)}, ${editing.lng.toFixed(4)})` : 'Pin location on map'}
+              <Field label="Address">
+                <textarea className="input" value={editing.address} onChange={e => setEditing({ ...editing, address: e.target.value })} placeholder="Apt 101, Building Name, Area, Abu Dhabi" rows="2" style={{ resize: 'vertical' }} />
+              </Field>
+              <Field label="Pin Location on Map">
+                <button type="button" className="btn" onClick={() => setShowPinPicker(true)} style={{ background: editing.lat ? colors.accentLight : 'white', borderColor: editing.lat ? colors.accent : colors.border, justifyContent: 'flex-start', width: '100%' }}>
+                  <MapPin size={14} style={{ color: editing.lat ? colors.accent : colors.ink + '99' }} />
+                  {editing.lat ? `📍 Pinned at ${editing.lat.toFixed(5)}, ${editing.lng.toFixed(5)}` : 'Click to pin location on map'}
                 </button>
+                {editing.lat && (
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <a href={`https://www.google.com/maps/?q=${editing.lat},${editing.lng}`} target="_blank" rel="noreferrer" style={{ fontSize: '11px', color: colors.accent, fontWeight: 600 }}>
+                      🗺️ View in Google Maps
+                    </a>
+                    <button type="button" className="btn btn-sm btn-danger" onClick={() => setEditing({ ...editing, lat: null, lng: null })} style={{ padding: '3px 8px', fontSize: '10px' }}>
+                      <X size={10} /> Remove pin
+                    </button>
+                  </div>
+                )}
               </Field>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <Field label="Default Rate/hr"><input className="input" type="number" value={editing.defaultRate} onChange={e => setEditing({ ...editing, defaultRate: parseFloat(e.target.value) || 0 })} /></Field>
@@ -3546,6 +3733,119 @@ function CloudSyncBadge({ status, lastSync, colors }) {
     }}>
       <style>{`.spin { animation: spin 1.2s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       {c.icon} {c.label}
+    </div>
+  );
+}
+
+function ExportRangeModal({ onExport, onClose, colors, allBookings, expenses }) {
+  // Calculate sensible defaults: earliest date and today
+  const allDates = [...allBookings.map(b => b.date), ...expenses.map(e => e.date)].filter(Boolean).sort();
+  const earliestDate = allDates[0] || new Date().toISOString().split('T')[0];
+  const today = new Date().toISOString().split('T')[0];
+
+  const [rangeStart, setRangeStart] = React.useState('');
+  const [rangeEnd, setRangeEnd] = React.useState('');
+  const [preset, setPreset] = React.useState('all');
+
+  const applyPreset = (p) => {
+    setPreset(p);
+    const now = new Date();
+    if (p === 'all') {
+      setRangeStart(''); setRangeEnd('');
+    } else if (p === 'today') {
+      setRangeStart(today); setRangeEnd(today);
+    } else if (p === 'week') {
+      const start = new Date(now);
+      start.setDate(start.getDate() - 6);
+      setRangeStart(start.toISOString().split('T')[0]); setRangeEnd(today);
+    } else if (p === 'thisMonth') {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      setRangeStart(start.toISOString().split('T')[0]); setRangeEnd(today);
+    } else if (p === 'lastMonth') {
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const end = new Date(now.getFullYear(), now.getMonth(), 0);
+      setRangeStart(start.toISOString().split('T')[0]); setRangeEnd(end.toISOString().split('T')[0]);
+    } else if (p === 'thisYear') {
+      const start = new Date(now.getFullYear(), 0, 1);
+      setRangeStart(start.toISOString().split('T')[0]); setRangeEnd(today);
+    } else if (p === 'custom') {
+      // Just leave whatever the user has
+    }
+  };
+
+  const presets = [
+    { id: 'all', label: 'All Time' },
+    { id: 'today', label: 'Today' },
+    { id: 'week', label: 'Last 7 Days' },
+    { id: 'thisMonth', label: 'This Month' },
+    { id: 'lastMonth', label: 'Last Month' },
+    { id: 'thisYear', label: 'This Year' },
+    { id: 'custom', label: 'Custom Range' }
+  ];
+
+  // Count what would be in the export
+  const inRange = (dateStr) => {
+    if (!rangeStart && !rangeEnd) return true;
+    if (rangeStart && dateStr < rangeStart) return false;
+    if (rangeEnd && dateStr > rangeEnd) return false;
+    return true;
+  };
+  const bookingCount = allBookings.filter(b => inRange(b.date)).length;
+  const expenseCount = expenses.filter(e => inRange(e.date)).length;
+  const totalRev = allBookings.filter(b => inRange(b.date)).reduce((s, b) => s + (b.total || 0), 0);
+  const totalExp = expenses.filter(e => inRange(e.date)).reduce((s, e) => s + parseFloat(e.amount || 0), 0);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <h3 className="display-font" style={{ margin: 0, fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <FileSpreadsheet size={20} color={colors.accent} /> Mega Excel Export
+          </h3>
+          <button className="btn btn-sm" onClick={onClose} style={{ padding: '6px' }}><X size={14} /></button>
+        </div>
+
+        <p style={{ margin: '0 0 16px', fontSize: '13px', color: colors.ink + '99' }}>
+          Pick a date range to export <strong>everything</strong>: dashboard summary + all bookings, clients, contracts, expenses, earnings, pending payments, cleaner homes — all in one Excel file.
+        </p>
+
+        <h4 className="display-font" style={{ margin: '0 0 10px', fontSize: '14px', fontWeight: 700 }}>Quick presets</h4>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '16px' }}>
+          {presets.map(p => (
+            <button key={p.id} className={`btn btn-sm ${preset === p.id ? 'btn-primary' : ''}`} onClick={() => applyPreset(p.id)} style={{ fontSize: '12px' }}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        <h4 className="display-font" style={{ margin: '0 0 10px', fontSize: '14px', fontWeight: 700 }}>Custom date range</h4>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+          <Field label="From">
+            <input type="date" className="input" value={rangeStart} onChange={e => { setRangeStart(e.target.value); setPreset('custom'); }} />
+          </Field>
+          <Field label="To">
+            <input type="date" className="input" value={rangeEnd} onChange={e => { setRangeEnd(e.target.value); setPreset('custom'); }} />
+          </Field>
+        </div>
+        <p style={{ fontSize: '11px', color: colors.ink + '99', margin: '0 0 16px' }}>
+          Leave both empty for all-time export.
+        </p>
+
+        <div style={{ background: colors.accentLight, border: `1.5px solid ${colors.accent}`, padding: '14px 18px', borderRadius: '10px', marginBottom: '16px' }}>
+          <div style={{ fontSize: '12px', color: colors.ink + 'AA', marginBottom: '4px' }}>Preview</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', fontSize: '13px' }}>
+            <div><strong>{bookingCount}</strong> bookings · <span style={{ color: colors.accent, fontWeight: 700 }}>{totalRev.toFixed(0)} AED</span> revenue</div>
+            <div><strong>{expenseCount}</strong> expenses · <span style={{ color: colors.rust, fontWeight: 700 }}>{totalExp.toFixed(0)} AED</span> spent</div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={() => onExport(rangeStart, rangeEnd)}>
+            <Download size={14} /> Generate Excel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
