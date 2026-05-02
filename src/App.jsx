@@ -2686,7 +2686,7 @@ function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colo
   const [year, setYear] = React.useState(now.getFullYear());
   const [month, setMonth] = React.useState(now.getMonth());
   const [selectedDate, setSelectedDate] = React.useState(now.toISOString().split('T')[0]);
-  const [selectedBooking, setSelectedBooking] = React.useState('');
+  const [selectedBookings, setSelectedBookings] = React.useState([]); // array of booking IDs (multi-select)
   const [showPreview, setShowPreview] = React.useState(false);
   const [invoiceNotes, setInvoiceNotes] = React.useState('');
 
@@ -2719,10 +2719,11 @@ function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colo
       return allBookings.filter(b => b.clientName === selectedClient && b.date === selectedDate);
     }
     if (mode === 'booking') {
-      return allBookings.filter(b => b.id == selectedBooking);
+      const ids = selectedBookings.map(String);
+      return allBookings.filter(b => b.clientName === selectedClient && ids.includes(String(b.id))).sort((a, b) => a.date.localeCompare(b.date) || (a.timing || '').localeCompare(b.timing || ''));
     }
     return [];
-  }, [mode, selectedClient, year, month, selectedDate, selectedBooking, allBookings]);
+  }, [mode, selectedClient, year, month, selectedDate, selectedBookings, allBookings]);
 
   const subtotal = invoiceItems.reduce((s, b) => s + (b.total || 0), 0);
   const totalHours = invoiceItems.reduce((s, b) => s + (b.hours || 0), 0);
@@ -2804,13 +2805,56 @@ function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colo
 
         {selectedClient && mode === 'booking' && (
           <>
-            <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>3. Pick the booking</h3>
-            <select className="select" value={selectedBooking} onChange={e => setSelectedBooking(e.target.value)} style={{ marginBottom: '20px' }}>
-              <option value="">— Pick a booking —</option>
-              {clientBookings.map(b => (
-                <option key={b.id} value={b.id}>{b.date} · {b.timing} · {b.cleaner} · {(b.total || 0).toFixed(2)} AED</option>
-              ))}
-            </select>
+            <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>3. Pick the booking(s)</h3>
+            <p style={{ margin: '0 0 10px', fontSize: '12px', color: colors.ink + '99' }}>
+              💡 Select one or more bookings to combine into a single invoice (e.g. when 2 cleaners worked on the same job).
+            </p>
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap' }}>
+              <button className="btn btn-sm" onClick={() => setSelectedBookings(clientBookings.map(b => String(b.id)))}>
+                <Check size={12} /> Select all
+              </button>
+              <button className="btn btn-sm" onClick={() => setSelectedBookings([])}>
+                <X size={12} /> Clear
+              </button>
+              {(() => {
+                // Group by date — show "Select today's all bookings" if multiple bookings same day
+                const dateGroups = {};
+                clientBookings.forEach(b => { dateGroups[b.date] = (dateGroups[b.date] || 0) + 1; });
+                const multipleDates = Object.entries(dateGroups).filter(([_, count]) => count > 1);
+                return multipleDates.map(([d, count]) => (
+                  <button key={d} className="btn btn-sm" onClick={() => {
+                    const dateBookings = clientBookings.filter(b => b.date === d).map(b => String(b.id));
+                    setSelectedBookings(dateBookings);
+                  }} style={{ background: colors.accentLight, borderColor: colors.accent, color: colors.accent }}>
+                    📅 {new Date(d).toLocaleDateString('en-GB')} ({count} cleaners)
+                  </button>
+                ));
+              })()}
+            </div>
+            <div style={{ border: `1px solid ${colors.border}`, borderRadius: '8px', maxHeight: '300px', overflowY: 'auto', marginBottom: '20px', background: 'white' }}>
+              {clientBookings.length === 0 ? (
+                <div style={{ padding: '20px', textAlign: 'center', color: colors.ink + '66', fontSize: '13px' }}>
+                  No bookings yet for this client.
+                </div>
+              ) : clientBookings.map(b => {
+                const isSelected = selectedBookings.includes(String(b.id));
+                return (
+                  <label key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', borderBottom: `1px solid ${colors.border}`, cursor: 'pointer', background: isSelected ? colors.accentLight : 'white' }}>
+                    <input type="checkbox" checked={isSelected} onChange={(e) => {
+                      if (e.target.checked) setSelectedBookings([...selectedBookings, String(b.id)]);
+                      else setSelectedBookings(selectedBookings.filter(id => id !== String(b.id)));
+                    }} style={{ transform: 'scale(1.2)', cursor: 'pointer' }} />
+                    <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'auto auto auto 1fr auto', gap: '12px', alignItems: 'center', fontSize: '13px' }}>
+                      <span className="mono" style={{ fontWeight: 600 }}>{new Date(b.date).toLocaleDateString('en-GB')}</span>
+                      <span className="mono" style={{ color: colors.ink + 'AA' }}>{b.timing}</span>
+                      <span style={{ fontWeight: 700, color: colors.accent }}>{b.cleaner}</span>
+                      <span style={{ color: colors.ink + '99', fontSize: '12px' }}>{b.withMaterials ? '✓ Materials' : ''}</span>
+                      <span className="mono" style={{ fontWeight: 700, color: colors.rust }}>{(b.total || 0).toFixed(2)} AED</span>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
           </>
         )}
 
@@ -2899,17 +2943,43 @@ function InvoicePreviewModal({ items, client, companyInfo, saveCompanyInfo, peri
     win.document.close();
   };
 
-  const handleWhatsApp = () => {
-    const msg = `Hi ${client?.name || 'Customer'},\n\nHere is your invoice from ${companyInfo.name}:\n\nInvoice #: ${invoiceNumber}\nDate: ${issueDate}\nPeriod: ${periodLabel}\nTotal Hours: ${totalHours}\nAmount: AED ${subtotal.toFixed(2)}\n\n${isPaid ? 'Status: PAID ✓' : 'Please find payment details below.'}\n\nThank you for your business!\n\n${companyInfo.name}\n${companyInfo.phone}`;
+  const buildWhatsAppMessage = () => {
+    return `Hi ${client?.name || 'Customer'},\n\nHere is your invoice from ${companyInfo.name}:\n\nInvoice #: ${invoiceNumber}\nDate: ${issueDate}\nPeriod: ${periodLabel}\nTotal Hours: ${totalHours}\nAmount: AED ${subtotal.toFixed(2)}\n\n${isPaid ? 'Status: PAID ✓' : 'Please find payment details in the attached PDF.'}\n\nThank you for your business!\n\n${companyInfo.name}\n${companyInfo.phone}`;
+  };
+
+  const handleWhatsAppText = () => {
     const phone = (client?.phone || '').replace(/[^0-9]/g, '');
-    const url = phone ? `https://wa.me/${phone}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+    const url = phone ? `https://wa.me/${phone}?text=${encodeURIComponent(buildWhatsAppMessage())}` : `https://wa.me/?text=${encodeURIComponent(buildWhatsAppMessage())}`;
     window.open(url, '_blank');
   };
 
-  // Build line items - one row per booking
+  const handleSendWhatsAppPDF = () => {
+    // Step 1: Trigger print-to-PDF
+    handlePrint();
+    // Step 2: After short delay, open WhatsApp with instruction message
+    setTimeout(() => {
+      const phone = (client?.phone || '').replace(/[^0-9]/g, '');
+      const msg = buildWhatsAppMessage();
+      const url = phone ? `https://wa.me/${phone}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+      const confirmed = confirm(
+        `📋 PDF download window is open.\n\n` +
+        `Steps to send via WhatsApp:\n\n` +
+        `1. In the print window, choose "Save as PDF" → Save to your device\n` +
+        `2. Click OK below to open WhatsApp\n` +
+        `3. In WhatsApp, tap the 📎 attachment icon\n` +
+        `4. Choose "Document" → select the saved invoice PDF\n` +
+        `5. Send!\n\n` +
+        `Click OK to open WhatsApp now.`
+      );
+      if (confirmed) window.open(url, '_blank');
+    }, 800);
+  };
+
+  // Build line items - one row per booking (now includes cleaner column for multi-cleaner invoices)
   const lineItems = items.map(b => ({
     description: titleByMode[mode],
     date: new Date(b.date).getDate(),
+    timing: b.timing || '',
     hours: b.hours,
     rate: b.pricePerHour,
     materials: b.withMaterials ? 'Yes' : '',
@@ -2917,14 +2987,25 @@ function InvoicePreviewModal({ items, client, companyInfo, saveCompanyInfo, peri
     amount: b.total
   }));
 
+  // Detect if this invoice has multiple cleaners (show "Cleaner" column)
+  const cleanersInInvoice = [...new Set(items.map(b => b.cleaner))];
+  const showCleanerColumn = cleanersInInvoice.length > 1 || mode === 'booking';
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '900px', maxHeight: '95vh' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
           <h3 className="display-font" style={{ margin: 0, fontSize: '20px', fontWeight: 700 }}>Invoice Preview</h3>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button className="btn btn-primary" onClick={handlePrint}><Printer size={14} /> Print / Save PDF</button>
-            <button className="btn" style={{ background: '#25D366', color: 'white', borderColor: '#25D366' }} onClick={handleWhatsApp}><MessageCircle size={14} /> WhatsApp</button>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <button className="btn" onClick={handlePrint} title="Open print dialog — choose 'Save as PDF' to download">
+              <Printer size={14} /> Print / Save PDF
+            </button>
+            <button className="btn" style={{ background: '#25D366', color: 'white', borderColor: '#25D366' }} onClick={handleSendWhatsAppPDF} title="Save PDF + open WhatsApp to send (with instructions)">
+              <MessageCircle size={14} /> Send via WhatsApp + PDF
+            </button>
+            <button className="btn" onClick={handleWhatsAppText} title="Open WhatsApp with text message only (no PDF)">
+              <MessageCircle size={14} /> Text only
+            </button>
             <button className="btn btn-sm" onClick={onClose} style={{ padding: '6px' }}><X size={14} /></button>
           </div>
         </div>
@@ -2942,6 +3023,8 @@ function InvoicePreviewModal({ items, client, companyInfo, saveCompanyInfo, peri
             notes={notes}
             mode={mode}
             periodLabel={periodLabel}
+            showCleanerColumn={showCleanerColumn}
+            cleanersInInvoice={cleanersInInvoice}
           />
         </div>
       </div>
@@ -2949,7 +3032,7 @@ function InvoicePreviewModal({ items, client, companyInfo, saveCompanyInfo, peri
   );
 }
 
-function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineItems, subtotal, totalHours, isPaid, notes, mode, periodLabel }) {
+function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineItems, subtotal, totalHours, isPaid, notes, mode, periodLabel, showCleanerColumn, cleanersInInvoice }) {
   const accent = '#0F4C3A';
   const paidColor = '#0F4C3A';
 
@@ -2989,6 +3072,11 @@ function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineIte
           <div style={{ fontWeight: 700, fontSize: '16px', marginBottom: '2px' }}>{client?.name}</div>
           <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.5 }}>{client?.address}</div>
           {client?.phone && <div style={{ fontSize: '12px', color: '#555' }}>📞 {client.phone}</div>}
+          {showCleanerColumn && cleanersInInvoice && cleanersInInvoice.length > 1 && (
+            <div style={{ fontSize: '11px', color: '#666', marginTop: '6px', fontStyle: 'italic' }}>
+              Service performed by: <strong>{cleanersInInvoice.join(', ')}</strong>
+            </div>
+          )}
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ marginBottom: '6px' }}>
@@ -3008,6 +3096,8 @@ function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineIte
           <tr style={{ background: accent, color: 'white' }}>
             <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Description</th>
             <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '70px' }}>Job Date</th>
+            {showCleanerColumn && <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '85px' }}>Cleaner</th>}
+            {mode === 'booking' && <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '90px' }}>Time</th>}
             <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '60px' }}>Hours</th>
             <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '70px' }}>Rate / hr</th>
             <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '70px' }}>Materials</th>
@@ -3021,6 +3111,8 @@ function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineIte
                 {idx === 0 ? <span style={{ fontWeight: 600 }}>{item.description}</span> : ''}
               </td>
               <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>{item.date}</td>
+              {showCleanerColumn && <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top', fontWeight: 600 }}>{item.cleaner}</td>}
+              {mode === 'booking' && <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top', fontFamily: 'monospace', fontSize: '11px' }}>{item.timing}</td>}
               <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>{item.hours}</td>
               <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>{item.rate}</td>
               <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>{item.materials}</td>
@@ -3032,6 +3124,8 @@ function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineIte
           <tr style={{ background: '#F0EBE0' }}>
             <td style={{ padding: '8px', fontWeight: 700 }}>Total hours</td>
             <td style={{ padding: '8px', textAlign: 'center', fontWeight: 700 }}></td>
+            {showCleanerColumn && <td style={{ padding: '8px' }}></td>}
+            {mode === 'booking' && <td style={{ padding: '8px' }}></td>}
             <td style={{ padding: '8px', textAlign: 'center', fontWeight: 700 }}>{totalHours.toFixed(1)}</td>
             <td colSpan="2" style={{ padding: '8px', textAlign: 'right', fontWeight: 700 }}>Total</td>
             <td style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 800, fontSize: '15px', color: accent, borderTop: `2px solid ${accent}` }}>
