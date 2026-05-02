@@ -1289,7 +1289,7 @@ export default function CleaningApp() {
         {view === 'input' && <InputView bookings={bookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} clients={clients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={CLEANERS} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
-        {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} />}
+        {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
         {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} exportContractsExcel={exportContractsExcel} />}
         {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} />}
@@ -1412,10 +1412,11 @@ function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, remo
   );
 }
 
-function ClientsView({ clients, saveClients, colors, allBookings, exportClientsExcel }) {
+function ClientsView({ clients, saveClients, colors, allBookings, exportClientsExcel, companyInfo }) {
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState('');
   const [showPinPicker, setShowPinPicker] = useState(false);
+  const [reminderFor, setReminderFor] = useState(null); // client object when reminder modal is open
 
   const startNew = () => setEditing(emptyClient());
   const startEdit = (c) => setEditing({ ...c });
@@ -1434,7 +1435,10 @@ function ClientsView({ clients, saveClients, colors, allBookings, exportClientsE
 
   const clientStats = (clientId) => {
     const visits = allBookings.filter(b => b.clientId === clientId);
-    return { visits: visits.length, revenue: visits.reduce((s, b) => s + (b.total || 0), 0) };
+    const sortedDates = visits.map(b => b.date).sort();
+    const lastVisitDate = sortedDates.length > 0 ? sortedDates[sortedDates.length - 1] : null;
+    const daysSince = lastVisitDate ? Math.floor((new Date() - new Date(lastVisitDate)) / (1000 * 60 * 60 * 24)) : null;
+    return { visits: visits.length, revenue: visits.reduce((s, b) => s + (b.total || 0), 0), lastVisitDate, daysSince };
   };
 
   return (
@@ -1471,6 +1475,11 @@ function ClientsView({ clients, saveClients, colors, allBookings, exportClientsE
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div className="display-font" style={{ fontSize: '18px', fontWeight: 700 }}>{c.name}</div>
                 <div style={{ display: 'flex', gap: '4px' }}>
+                  {c.phone && (
+                    <button className="btn btn-sm" onClick={() => setReminderFor(c)} title="Send WhatsApp reminder" style={{ padding: '4px 8px', background: '#25D366', color: 'white', borderColor: '#25D366' }}>
+                      <MessageCircle size={12} />
+                    </button>
+                  )}
                   <button className="btn btn-sm" onClick={() => startEdit(c)} style={{ padding: '4px 8px' }}><Edit2 size={12} /></button>
                   <button className="btn btn-danger btn-sm" onClick={() => remove(c.id)} style={{ padding: '4px 8px' }}><Trash2 size={12} /></button>
                 </div>
@@ -1480,6 +1489,15 @@ function ClientsView({ clients, saveClients, colors, allBookings, exportClientsE
               <div style={{ display: 'flex', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
                 <span className="badge" style={{ background: colors.soft }}>{c.defaultRate} AED/hr</span>
                 {c.defaultMaterials && <span className="badge" style={{ background: colors.cellMaterials, color: colors.accent }}>w/ materials</span>}
+                {stats.daysSince !== null && (
+                  <span className="badge" style={{
+                    background: stats.daysSince > 30 ? '#FEE2E2' : stats.daysSince > 14 ? '#FEF3C7' : colors.cellMaterials,
+                    color: stats.daysSince > 30 ? '#B8472A' : stats.daysSince > 14 ? '#D97706' : colors.accent,
+                    fontWeight: 700
+                  }}>
+                    {stats.daysSince === 0 ? 'today' : stats.daysSince === 1 ? '1 day ago' : `${stats.daysSince} days ago`}
+                  </span>
+                )}
               </div>
               {stats.visits > 0 && (
                 <div style={{ marginTop: '6px', paddingTop: '8px', borderTop: `1px solid ${colors.border}`, fontSize: '11px', color: colors.ink + '99', display: 'flex', justifyContent: 'space-between' }}>
@@ -1546,6 +1564,15 @@ function ClientsView({ clients, saveClients, colors, allBookings, exportClientsE
           }}
           onClose={() => setShowPinPicker(false)}
           colors={colors}
+        />
+      )}
+      {reminderFor && (
+        <WhatsAppReminderModal
+          client={reminderFor}
+          companyInfo={companyInfo}
+          stats={clientStats(reminderFor.id)}
+          colors={colors}
+          onClose={() => setReminderFor(null)}
         />
       )}
     </div>
@@ -3937,6 +3964,143 @@ function ExportRangeModal({ onExport, onClose, colors, allBookings, expenses }) 
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" onClick={() => onExport(rangeStart, rangeEnd)}>
             <Download size={14} /> Generate Excel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WhatsAppReminderModal({ client, companyInfo, stats, colors, onClose }) {
+  // Calculate tomorrow's date
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowFormatted = tomorrow.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  const dayName = tomorrow.toLocaleDateString('en-US', { weekday: 'long' });
+
+  const companyName = companyInfo?.name || 'AR Cleaning Services';
+  const companyPhone = companyInfo?.phone || '';
+  const firstName = (client.name || 'there').split(' ')[0];
+
+  const TEMPLATES = [
+    {
+      id: 'check_in',
+      label: '👋 Friendly check-in',
+      description: 'Soft offer with available slots — best for lapsed clients',
+      message: `Hi ${firstName}! 👋\n\nIt's ${companyName}.\n\nI had a couple of free slots open up for tomorrow (${dayName}) — would you like a freshen-up visit?\n\nIf yes, just reply with a preferred time and I'll add you to the schedule. No pressure if not — just thought of you! ✨\n\n📞 ${companyPhone}`
+    },
+    {
+      id: 'remind_visit',
+      label: '📅 Reminder + slot options',
+      description: `It's been ${stats.daysSince || 0} days since their last visit`,
+      message: `Hi ${firstName}!\n\nHope you're doing well. ${stats.daysSince ? `It's been about ${stats.daysSince} day${stats.daysSince > 1 ? 's' : ''} since your last cleaning` : 'Just checking in'} — would you like to schedule the next visit?\n\nI have these slots tomorrow (${dayName}):\n🕗 8-10 AM\n🕒 2-4 PM\n🕓 4-6 PM\n\nReply with the time that works for you 👍\n\n— ${companyName}\n📞 ${companyPhone}`
+    },
+    {
+      id: 'discount',
+      label: '🎁 10% off for tomorrow',
+      description: 'Time-bound discount — creates urgency',
+      message: `Hi ${firstName}! 🌟\n\nTomorrow's calendar (${dayName}) has some open slots — to keep our team busy, I'm offering *10% off* for any booking made today for tomorrow's service.\n\nWant me to lock in a slot for you? Just reply 'BOOK' 📅\n\n— ${companyName}\n📞 ${companyPhone}`
+    },
+    {
+      id: 'confirm_visit',
+      label: '✅ Confirm tomorrow\'s visit',
+      description: 'For regular contract clients with a booking tomorrow',
+      message: `Good morning, ${firstName}! ☀️\n\nJust a heads-up — your cleaning is confirmed for tomorrow (${tomorrowFormatted}).\n\nIs there anything specific you'd like us to focus on?\n• Deep clean kitchen\n• Wash bed sheets\n• Iron clothes\n• Anything else — just let me know!\n\nSee you tomorrow! ✨\n\n— ${companyName}`
+    },
+    {
+      id: 'lapsed',
+      label: '💌 Long-lapsed client',
+      description: 'For clients you haven\'t seen in 30+ days',
+      message: `Hi ${firstName}!\n\nIt's been a while since we cleaned for you — hope everything's well at home.\n\nIf you'd like to schedule a visit (this week or next), just message me back. As a thank-you for being a previous client, your next booking is *15% off*. 🎁\n\nLooking forward to hearing from you!\n\n— ${companyName}\n📞 ${companyPhone}`
+    }
+  ];
+
+  const [selectedId, setSelectedId] = React.useState(stats.daysSince > 30 ? 'lapsed' : stats.daysSince > 7 ? 'check_in' : 'remind_visit');
+  const selected = TEMPLATES.find(t => t.id === selectedId);
+  const [editedMessage, setEditedMessage] = React.useState(selected.message);
+
+  React.useEffect(() => {
+    setEditedMessage(selected.message);
+  }, [selectedId]);
+
+  const sendMessage = () => {
+    const phone = (client.phone || '').replace(/[^0-9]/g, '');
+    if (!phone) {
+      alert('No phone number for this client. Add a phone number first.');
+      return;
+    }
+    const url = `https://wa.me/${phone}?text=${encodeURIComponent(editedMessage)}`;
+    window.open(url, '_blank');
+  };
+
+  const copyMessage = () => {
+    navigator.clipboard.writeText(editedMessage).then(() => {
+      alert('✓ Message copied to clipboard');
+    }).catch(() => {
+      alert('Couldn\'t copy automatically. Please select the text manually.');
+    });
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '700px', maxHeight: '95vh' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+          <h3 className="display-font" style={{ margin: 0, fontSize: '20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <MessageCircle size={20} color="#25D366" /> WhatsApp Reminder
+          </h3>
+          <button className="btn btn-sm" onClick={onClose} style={{ padding: '6px' }}><X size={14} /></button>
+        </div>
+
+        <div style={{ background: colors.soft, padding: '12px 14px', borderRadius: '8px', marginBottom: '14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '15px' }}>{client.name}</div>
+              {client.phone && <div className="mono" style={{ fontSize: '12px', color: colors.ink + 'AA' }}>{client.phone}</div>}
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '11px', color: colors.ink + '99' }}>Last visit</div>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: stats.daysSince > 30 ? colors.rust : stats.daysSince > 14 ? '#D97706' : colors.accent }}>
+                {stats.lastVisitDate ? `${stats.daysSince === 0 ? 'Today' : stats.daysSince === 1 ? 'Yesterday' : `${stats.daysSince} days ago`}` : 'No previous visits'}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <h4 className="display-font" style={{ margin: '0 0 8px', fontSize: '14px', fontWeight: 700 }}>1. Pick a template</h4>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '14px' }}>
+          {TEMPLATES.map(t => (
+            <label key={t.id} style={{
+              display: 'flex', alignItems: 'flex-start', gap: '10px',
+              padding: '10px 12px', borderRadius: '6px',
+              background: selectedId === t.id ? colors.accentLight : 'white',
+              border: `1px solid ${selectedId === t.id ? colors.accent : colors.border}`,
+              cursor: 'pointer'
+            }}>
+              <input type="radio" name="template" checked={selectedId === t.id} onChange={() => setSelectedId(t.id)} style={{ marginTop: '3px' }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: '13px' }}>{t.label}</div>
+                <div style={{ fontSize: '11px', color: colors.ink + '99' }}>{t.description}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+
+        <h4 className="display-font" style={{ margin: '0 0 8px', fontSize: '14px', fontWeight: 700 }}>2. Edit message (optional)</h4>
+        <textarea
+          className="input"
+          value={editedMessage}
+          onChange={e => setEditedMessage(e.target.value)}
+          rows="10"
+          style={{ resize: 'vertical', fontFamily: 'inherit', fontSize: '13px', marginBottom: '14px', whiteSpace: 'pre-wrap' }}
+        />
+
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <button className="btn" onClick={copyMessage}>
+            <FileText size={14} /> Copy text
+          </button>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn" style={{ background: '#25D366', color: 'white', borderColor: '#25D366' }} onClick={sendMessage}>
+            <MessageCircle size={14} /> Open WhatsApp
           </button>
         </div>
       </div>
