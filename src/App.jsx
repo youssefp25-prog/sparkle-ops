@@ -8,7 +8,7 @@ const SUPABASE_URL = 'https://atokkkspcampdoivrxwg.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF0b2tra3NwY2FtcGRvaXZyeHdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1NTY3MTUsImV4cCI6MjA5MzEzMjcxNX0.caS-qlXLJp9KhuikrooM23vEiIVSZ3taheZ3rONNU1U';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const CLEANERS = ['Leah', 'Eva', 'Zainab', 'Roselyn', 'Coline', 'Angel', 'Razelle'];
+const CLEANERS = ['Leah', 'Eva', 'Zainab', 'Roselyn', 'Coline', 'Angel','Sara','Souma', 'Razelle'];
 const PICKUP_TYPES = ['HOME', 'OFFICE'];
 const EXPENSE_CATEGORIES = ['Salaries', 'Transport', 'Materials', 'Marketing', 'Rent', 'Utilities', 'Maintenance/Repairs', 'PPE & Uniforms', 'Staff Meals/Allowances', 'Office Supplies', 'Government Fees', 'Bank Charges', 'Software/Subscriptions', 'Fuel', 'Vehicle Service', 'Miscellaneous'];
 const EXPENSE_PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Credit Card', 'Cheque', 'Online Gateway'];
