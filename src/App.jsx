@@ -1806,16 +1806,38 @@ function EarningsView({ allBookings, CLEANERS, colors, exportEarningsExcel }) {
 }
 
 function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookings, date, colors, formatDateShort, exportPendingExcel }) {
+  const [expanded, setExpanded] = useState(new Set());
+  const toggleExpand = (key) => {
+    const next = new Set(expanded);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    setExpanded(next);
+  };
+
   const pending = allBookings.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
   const totalPending = pending.reduce((s, b) => s + b.total, 0);
+
+  // Group by client, then by day (so multiple cleaners on the same day for the same client roll up into one payment)
   const byClient = {};
   pending.forEach(b => {
-    const k = b.clientName || 'Unknown';
-    if (!byClient[k]) byClient[k] = { name: k, phone: b.phone, items: [], total: 0 };
-    byClient[k].items.push(b);
-    byClient[k].total += b.total;
+    const clientKey = b.clientName || 'Unknown';
+    if (!byClient[clientKey]) byClient[clientKey] = { name: clientKey, phone: b.phone, days: {}, total: 0 };
+    const dayKey = b.date;
+    if (!byClient[clientKey].days[dayKey]) {
+      byClient[clientKey].days[dayKey] = { date: dayKey, items: [], total: 0, cleaners: new Set(), paymentTypes: new Set(), locations: new Set() };
+    }
+    const day = byClient[clientKey].days[dayKey];
+    day.items.push(b);
+    day.total += b.total;
+    if (b.cleaner) day.cleaners.add(b.cleaner);
+    if (b.paymentType) day.paymentTypes.add(b.paymentType);
+    if (b.location) day.locations.add(b.location);
+    byClient[clientKey].total += b.total;
   });
-  const groups = Object.values(byClient).sort((a, b) => b.total - a.total);
+  const groups = Object.values(byClient).map(g => ({
+    ...g,
+    daysList: Object.values(g.days).sort((a, b) => new Date(a.date) - new Date(b.date)),
+    jobCount: Object.values(g.days).reduce((s, d) => s + d.items.length, 0),
+  })).sort((a, b) => b.total - a.total);
 
   const markPaid = async (bookingId, bookingDate) => {
     if (bookingDate === date) {
@@ -1823,6 +1845,24 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
     }
     if (savedDays[bookingDate]) {
       const updatedDays = { ...savedDays, [bookingDate]: { ...savedDays[bookingDate], bookings: savedDays[bookingDate].bookings.map(b => b.id === bookingId ? { ...b, paymentStatus: 'PAID' } : b) } };
+      setSavedDays(updatedDays);
+      try { localStorage.setItem('sparkle_all_days', JSON.stringify(updatedDays)); } catch (e) {}
+    }
+  };
+
+  // Mark every unpaid booking for a given client on a given day as paid in one click
+  const markDayPaid = async (dayData) => {
+    const ids = new Set(dayData.items.map(i => i.id));
+    const bookingDate = dayData.date;
+    const confirmMsg = dayData.items.length > 1
+      ? `Mark all ${dayData.items.length} jobs (${Array.from(dayData.cleaners).join(', ')}) for this day as PAID?`
+      : `Mark this job as PAID?`;
+    if (!confirm(confirmMsg)) return;
+    if (bookingDate === date) {
+      setBookings(bookings.map(b => ids.has(b.id) ? { ...b, paymentStatus: 'PAID' } : b));
+    }
+    if (savedDays[bookingDate]) {
+      const updatedDays = { ...savedDays, [bookingDate]: { ...savedDays[bookingDate], bookings: savedDays[bookingDate].bookings.map(b => ids.has(b.id) ? { ...b, paymentStatus: 'PAID' } : b) } };
       setSavedDays(updatedDays);
       try { localStorage.setItem('sparkle_all_days', JSON.stringify(updatedDays)); } catch (e) {}
     }
@@ -1836,7 +1876,7 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Pending Payments</h2>
-          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>{pending.length} unpaid jobs across {groups.length} clients</p>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>{pending.length} unpaid jobs · grouped by client &amp; day across {groups.length} {groups.length === 1 ? 'client' : 'clients'}</p>
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
           {pending.length > 0 && <button className="btn btn-primary" onClick={exportPendingExcel}><FileSpreadsheet size={14} /> Excel</button>}
@@ -1862,28 +1902,89 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
                   <div className="display-font" style={{ fontSize: '17px', fontWeight: 700 }}>{g.name}</div>
                   {g.phone && <div style={{ fontSize: '12px', color: colors.ink + 'AA', marginTop: '2px' }}><Phone size={11} style={{ display: 'inline', verticalAlign: 'middle' }} /> <span className="mono">{g.phone}</span></div>}
                 </div>
-                <div className="display-font" style={{ fontSize: '20px', fontWeight: 700, color: colors.warning }}>{g.total.toFixed(0)} AED owed</div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '11px', color: colors.ink + '99', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{g.daysList.length} {g.daysList.length === 1 ? 'day' : 'days'} · {g.jobCount} {g.jobCount === 1 ? 'job' : 'jobs'}</div>
+                  <div className="display-font" style={{ fontSize: '20px', fontWeight: 700, color: colors.warning }}>{g.total.toFixed(0)} AED owed</div>
+                </div>
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
                   <tbody>
-                    {g.items.sort((a, b) => new Date(a.date) - new Date(b.date)).map(b => {
-                      const overdue = daysOverdue(b.date);
+                    {g.daysList.map(day => {
+                      const overdue = daysOverdue(day.date);
+                      const dayKey = g.name + '__' + day.date;
+                      const isExpanded = expanded.has(dayKey);
+                      const cleanersArr = Array.from(day.cleaners);
+                      const paymentTypesArr = Array.from(day.paymentTypes);
+                      const locationsArr = Array.from(day.locations);
+                      const canExpand = day.items.length > 1;
                       return (
-                        <tr key={b.id + '_' + b.date} style={{ borderTop: `1px solid ${colors.border}` }}>
-                          <td style={{ padding: '10px 18px' }}>
-                            <div style={{ fontWeight: 600 }}>{formatDateShort(b.date)}</div>
-                            {overdue > 0 && <div style={{ fontSize: '11px', color: overdue > 7 ? colors.rust : colors.warning, fontWeight: 600 }}>{overdue}d overdue</div>}
-                          </td>
-                          <td style={{ padding: '10px' }}><span className="badge" style={{ background: colors.soft }}>{b.cleaner}</span></td>
-                          <td style={{ padding: '10px', fontSize: '12px' }} className="mono">{b.timing}</td>
-                          <td style={{ padding: '10px', fontSize: '12px', color: colors.ink + '99' }}>{b.location}</td>
-                          <td style={{ padding: '10px', textAlign: 'center' }}><span className="badge" style={{ background: b.paymentType === 'CASH' ? '#FEE2E2' : colors.accentLight, color: b.paymentType === 'CASH' ? colors.rust : colors.accent }}>{b.paymentType}</span></td>
-                          <td className="mono" style={{ padding: '10px', textAlign: 'right', fontWeight: 700, color: colors.warning }}>{b.total.toFixed(0)}</td>
-                          <td style={{ padding: '10px 18px', textAlign: 'right' }}>
-                            <button className="btn btn-primary btn-sm" onClick={() => markPaid(b.id, b.date)}><Check size={12} /> Mark Paid</button>
-                          </td>
-                        </tr>
+                        <React.Fragment key={dayKey}>
+                          <tr style={{ borderTop: `1px solid ${colors.border}`, cursor: canExpand ? 'pointer' : 'default' }} onClick={() => canExpand && toggleExpand(dayKey)}>
+                            <td style={{ padding: '12px 18px', width: '160px', verticalAlign: 'top' }}>
+                              <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                {canExpand
+                                  ? <ChevronRight size={14} style={{ transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', color: colors.ink + '99' }} />
+                                  : <span style={{ width: '14px' }} />}
+                                {formatDateShort(day.date)}
+                              </div>
+                              {overdue > 0 && <div style={{ fontSize: '11px', color: overdue > 7 ? colors.rust : colors.warning, fontWeight: 600, marginLeft: '20px' }}>{overdue}d overdue</div>}
+                            </td>
+                            <td style={{ padding: '12px 10px', verticalAlign: 'top' }}>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                {cleanersArr.map(c => <span key={c} className="badge" style={{ background: colors.soft }}>{c}</span>)}
+                              </div>
+                              {locationsArr.length > 0 && (
+                                <div style={{ fontSize: '11px', color: colors.ink + '88', marginTop: '4px' }}>
+                                  <MapPin size={10} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '2px' }} />
+                                  {locationsArr.slice(0, 2).join(' · ')}{locationsArr.length > 2 ? ` (+${locationsArr.length - 2})` : ''}
+                                </div>
+                              )}
+                            </td>
+                            <td style={{ padding: '12px 10px', fontSize: '12px', color: colors.ink + '99', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
+                              {day.items.length} {day.items.length === 1 ? 'job' : 'jobs'}
+                            </td>
+                            <td style={{ padding: '12px 10px', textAlign: 'center', verticalAlign: 'top', whiteSpace: 'nowrap' }}>
+                              {paymentTypesArr.map(pt => (
+                                <span key={pt} className="badge" style={{ background: pt === 'CASH' ? '#FEE2E2' : colors.accentLight, color: pt === 'CASH' ? colors.rust : colors.accent, marginRight: '4px' }}>{pt}</span>
+                              ))}
+                            </td>
+                            <td className="mono" style={{ padding: '12px 10px', textAlign: 'right', fontWeight: 700, color: colors.warning, fontSize: '15px', verticalAlign: 'top' }}>{day.total.toFixed(0)}</td>
+                            <td style={{ padding: '12px 18px', textAlign: 'right', verticalAlign: 'top' }}>
+                              <button
+                                className="btn btn-primary btn-sm"
+                                onClick={(e) => { e.stopPropagation(); markDayPaid(day); }}
+                                title={canExpand ? `Mark all ${day.items.length} jobs paid` : 'Mark as paid'}
+                              >
+                                <Check size={12} /> {canExpand ? 'Mark Day Paid' : 'Mark Paid'}
+                              </button>
+                            </td>
+                          </tr>
+
+                          {isExpanded && canExpand && day.items.map(b => (
+                            <tr key={b.id + '_detail'} style={{ background: colors.soft + '55', fontSize: '12px' }}>
+                              <td style={{ padding: '8px 18px 8px 44px', color: colors.ink + '77', fontStyle: 'italic' }}>↳ detail</td>
+                              <td style={{ padding: '8px 10px' }}>
+                                <span className="badge" style={{ background: 'white', border: `1px solid ${colors.border}` }}>{b.cleaner}</span>
+                                <span className="mono" style={{ marginLeft: '8px', color: colors.ink + '99' }}>{b.timing}</span>
+                              </td>
+                              <td style={{ padding: '8px 10px', color: colors.ink + '77' }}>{b.location || '—'}</td>
+                              <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                                <span className="badge" style={{ background: b.paymentType === 'CASH' ? '#FEE2E2' : colors.accentLight, color: b.paymentType === 'CASH' ? colors.rust : colors.accent }}>{b.paymentType}</span>
+                              </td>
+                              <td className="mono" style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{b.total.toFixed(0)}</td>
+                              <td style={{ padding: '8px 18px', textAlign: 'right' }}>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); markPaid(b.id, b.date); }}
+                                  style={{ fontSize: '11px', padding: '4px 10px', background: 'white', border: `1px solid ${colors.border}`, borderRadius: '6px', cursor: 'pointer', color: colors.ink + 'CC' }}
+                                  title="Mark only this cleaner's job as paid"
+                                >
+                                  Mark this only
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
