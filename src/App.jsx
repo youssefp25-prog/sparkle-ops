@@ -1807,14 +1807,31 @@ function EarningsView({ allBookings, CLEANERS, colors, exportEarningsExcel }) {
 
 function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookings, date, colors, formatDateShort, exportPendingExcel }) {
   const [expanded, setExpanded] = useState(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterDate, setFilterDate] = useState('');
   const toggleExpand = (key) => {
     const next = new Set(expanded);
     if (next.has(key)) next.delete(key); else next.add(key);
     setExpanded(next);
   };
 
-  const pending = allBookings.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
+  // Start with all unpaid jobs
+  const allPending = allBookings.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
+  const allPendingTotal = allPending.reduce((s, b) => s + b.total, 0);
+
+  // Apply filters (search text + date)
+  const q = searchQuery.trim().toLowerCase();
+  const pending = allPending.filter(b => {
+    if (filterDate && b.date !== filterDate) return false;
+    if (q) {
+      const blob = `${b.clientName || ''} ${b.cleaner || ''} ${b.location || ''} ${b.phone || ''}`.toLowerCase();
+      if (!blob.includes(q)) return false;
+    }
+    return true;
+  });
   const totalPending = pending.reduce((s, b) => s + b.total, 0);
+  const isFiltered = q.length > 0 || filterDate.length > 0;
+  const clearFilters = () => { setSearchQuery(''); setFilterDate(''); };
 
   // Group by client, then by day (so multiple cleaners on the same day for the same client roll up into one payment)
   const byClient = {};
@@ -1873,26 +1890,79 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Pending Payments</h2>
-          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>{pending.length} unpaid jobs · grouped by client &amp; day across {groups.length} {groups.length === 1 ? 'client' : 'clients'}</p>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>
+            {isFiltered ? (
+              <>Showing <strong>{pending.length}</strong> of {allPending.length} unpaid jobs · <strong>{groups.length}</strong> {groups.length === 1 ? 'client' : 'clients'}</>
+            ) : (
+              <>{pending.length} unpaid jobs · grouped by client &amp; day across {groups.length} {groups.length === 1 ? 'client' : 'clients'}</>
+            )}
+          </p>
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
           {pending.length > 0 && <button className="btn btn-primary" onClick={exportPendingExcel}><FileSpreadsheet size={14} /> Excel</button>}
           <div style={{ padding: '12px 20px', background: pending.length ? '#FEF3C7' : colors.accentLight, border: `1.5px solid ${pending.length ? colors.warning : colors.accent}`, borderRadius: '10px', textAlign: 'right' }}>
-            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>Outstanding</div>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>{isFiltered ? 'Filtered' : 'Outstanding'}</div>
             <div className="display-font" style={{ fontSize: '24px', fontWeight: 800, color: pending.length ? colors.warning : colors.accent }}>{totalPending.toFixed(2)} AED</div>
+            {isFiltered && <div style={{ fontSize: '10px', color: colors.ink + '77', marginTop: '2px' }}>of {allPendingTotal.toFixed(0)} AED total</div>}
           </div>
         </div>
       </div>
 
-      {pending.length === 0 ? (
-        <div style={{ background: colors.accentLight, borderRadius: '12px', border: `1px solid ${colors.accent}33`, padding: '50px 20px', textAlign: 'center' }}>
-          <Check size={48} style={{ color: colors.accent, marginBottom: '12px' }} />
-          <h3 className="display-font" style={{ margin: '0 0 6px', color: colors.accent, fontSize: '22px', fontWeight: 700 }}>All paid up!</h3>
-          <p style={{ margin: 0, fontSize: '13px', color: colors.ink + '99' }}>No outstanding payments. Mark jobs as PENDING in the bookings tab to track them here.</p>
+      {/* Search & date filter bar */}
+      <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', background: 'white', padding: '10px 12px', borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+        <div style={{ position: 'relative', flex: '1 1 260px', minWidth: '200px' }}>
+          <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: colors.ink + '77' }} />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Search by client, cleaner, location or phone…"
+            style={{ width: '100%', padding: '9px 12px 9px 36px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '13px', background: colors.soft + '55', outline: 'none' }}
+          />
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <label style={{ fontSize: '12px', color: colors.ink + '99', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            <CalendarDays size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} />
+            On day:
+          </label>
+          <input
+            type="date"
+            value={filterDate}
+            onChange={e => setFilterDate(e.target.value)}
+            style={{ padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '13px', background: colors.soft + '55', outline: 'none' }}
+          />
+        </div>
+        {isFiltered && (
+          <button
+            onClick={clearFilters}
+            style={{ padding: '8px 14px', border: `1px solid ${colors.border}`, background: 'white', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', color: colors.ink + 'CC', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}
+            title="Clear all filters"
+          >
+            <X size={12} /> Clear
+          </button>
+        )}
+      </div>
+
+      {pending.length === 0 ? (
+        isFiltered ? (
+          <div style={{ background: 'white', borderRadius: '12px', border: `1px dashed ${colors.border}`, padding: '50px 20px', textAlign: 'center' }}>
+            <Search size={40} style={{ color: colors.ink + '55', marginBottom: '12px' }} />
+            <h3 className="display-font" style={{ margin: '0 0 6px', color: colors.ink, fontSize: '20px', fontWeight: 700 }}>No matches found</h3>
+            <p style={{ margin: '0 0 14px', fontSize: '13px', color: colors.ink + '99' }}>
+              Try a different search term{filterDate ? ` or a different date` : ''}.
+            </p>
+            <button onClick={clearFilters} className="btn btn-primary btn-sm"><X size={12} /> Clear filters</button>
+          </div>
+        ) : (
+          <div style={{ background: colors.accentLight, borderRadius: '12px', border: `1px solid ${colors.accent}33`, padding: '50px 20px', textAlign: 'center' }}>
+            <Check size={48} style={{ color: colors.accent, marginBottom: '12px' }} />
+            <h3 className="display-font" style={{ margin: '0 0 6px', color: colors.accent, fontSize: '22px', fontWeight: 700 }}>All paid up!</h3>
+            <p style={{ margin: 0, fontSize: '13px', color: colors.ink + '99' }}>No outstanding payments. Mark jobs as PENDING in the bookings tab to track them here.</p>
+          </div>
+        )
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           {groups.map(g => (
