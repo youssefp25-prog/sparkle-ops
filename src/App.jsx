@@ -73,6 +73,11 @@ export default function CleaningApp() {
   const [cleanerHomes, setCleanerHomes] = useState({}); // { Leah: { address, lat, lng }, ... }
   const [officeAddress, setOfficeAddress] = useState({ address: 'Office, Abu Dhabi', lat: 24.4539, lng: 54.3773 });
   const [expenses, setExpenses] = useState([]);
+  // payroll: { [monthKey]: { [cleanerName]: { salary, deductions: [{amount, reason, date}], bonuses: [{amount, reason, date}], attendance: { [dateISO]: 'present' | 'absent' | 'half' }, workingHours: number, notes } } }
+  // monthKey format: 'YYYY-MM' (e.g. '2026-04')
+  const [payroll, setPayroll] = useState({});
+  // clientCredits: { [clientName]: { balance: number, history: [{date, amount, note, type: 'credit'|'debit'}] } }
+  const [clientCredits, setClientCredits] = useState({});
   const [cloudStatus, setCloudStatus] = useState('connecting'); // 'connecting', 'synced', 'syncing', 'offline'
   const [lastSync, setLastSync] = useState(null);
   const [companyInfo, setCompanyInfo] = useState({
@@ -117,6 +122,10 @@ export default function CleaningApp() {
         if (companyRaw) setCompanyInfo(prev => ({ ...prev, ...JSON.parse(companyRaw) }));
         const expensesRaw = localStorage.getItem('sparkle_expenses');
         if (expensesRaw) setExpenses(JSON.parse(expensesRaw));
+        const payrollRaw = localStorage.getItem('sparkle_payroll');
+        if (payrollRaw) setPayroll(JSON.parse(payrollRaw));
+        const creditsRaw = localStorage.getItem('sparkle_client_credits');
+        if (creditsRaw) setClientCredits(JSON.parse(creditsRaw));
       } catch (e) { console.error('Local load error:', e); }
 
       // Then try to fetch from cloud and overwrite local data with cloud data
@@ -399,6 +408,18 @@ export default function CleaningApp() {
       setCloudStatus('offline');
       console.error('Cloud sync error (expenses):', e);
     }
+  };
+
+  // Payroll is saved only to localStorage (no cloud table yet — can be added later without breaking anything)
+  const savePayroll = (next) => {
+    setPayroll(next);
+    try { localStorage.setItem('sparkle_payroll', JSON.stringify(next)); } catch (e) {}
+  };
+
+  // Client credits are saved only to localStorage (no cloud table yet)
+  const saveClientCredits = (next) => {
+    setClientCredits(next);
+    try { localStorage.setItem('sparkle_client_credits', JSON.stringify(next)); } catch (e) {}
   };
 
   const generateFromContracts = () => {
@@ -1281,6 +1302,7 @@ export default function CleaningApp() {
           <button className={`tab ${view === 'driver' ? 'active' : ''}`} onClick={() => setView('driver')}><Truck size={15} /> Driver</button>
           <button className={`tab ${view === 'invoices' ? 'active' : ''}`} onClick={() => setView('invoices')}><Receipt size={15} /> Invoices</button>
           <button className={`tab ${view === 'expenses' ? 'active' : ''}`} onClick={() => setView('expenses')}><Wallet size={15} /> Expenses</button>
+          <button className={`tab ${view === 'payroll' ? 'active' : ''}`} onClick={() => setView('payroll')}><Users size={15} /> Payroll</button>
           <button className={`tab ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Settings size={15} /> Settings</button>
         </div>
       </div>
@@ -1292,11 +1314,12 @@ export default function CleaningApp() {
         {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
         {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} exportContractsExcel={exportContractsExcel} />}
         {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
-        {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} />}
+        {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
         {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={CLEANERS} updateBooking={updateBooking} />}
         {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
         {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} />}
+        {view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} colors={colors} />}
         {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} cloudStatus={cloudStatus} lastSync={lastSync} bookings={bookings} savedDays={savedDays} clients={clients} contracts={contracts} cleanerHomes={cleanerHomes} officeAddress={officeAddress} expenses={expenses} setCloudStatus={setCloudStatus} setLastSync={setLastSync} />}
       </div>
 
@@ -1805,10 +1828,13 @@ function EarningsView({ allBookings, CLEANERS, colors, exportEarningsExcel }) {
   );
 }
 
-function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookings, date, colors, formatDateShort, exportPendingExcel }) {
+function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookings, date, colors, formatDateShort, exportPendingExcel, clientCredits, saveClientCredits }) {
   const [expanded, setExpanded] = useState(new Set());
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterDate, setFilterDate] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  // Payment modal state: null when closed, or { items, defaultType, defaultAmount, clientName, date }
+  const [payModal, setPayModal] = useState(null);
   const toggleExpand = (key) => {
     const next = new Set(expanded);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -1819,10 +1845,11 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
   const allPending = allBookings.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
   const allPendingTotal = allPending.reduce((s, b) => s + b.total, 0);
 
-  // Apply filters (search text + date)
+  // Apply filters (search text + date range)
   const q = searchQuery.trim().toLowerCase();
   const pending = allPending.filter(b => {
-    if (filterDate && b.date !== filterDate) return false;
+    if (dateFrom && b.date < dateFrom) return false;
+    if (dateTo && b.date > dateTo) return false;
     if (q) {
       const blob = `${b.clientName || ''} ${b.cleaner || ''} ${b.location || ''} ${b.phone || ''}`.toLowerCase();
       if (!blob.includes(q)) return false;
@@ -1830,8 +1857,8 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
     return true;
   });
   const totalPending = pending.reduce((s, b) => s + b.total, 0);
-  const isFiltered = q.length > 0 || filterDate.length > 0;
-  const clearFilters = () => { setSearchQuery(''); setFilterDate(''); };
+  const isFiltered = q.length > 0 || dateFrom.length > 0 || dateTo.length > 0;
+  const clearFilters = () => { setSearchQuery(''); setDateFrom(''); setDateTo(''); };
 
   // Group by client, then by day (so multiple cleaners on the same day for the same client roll up into one payment)
   const byClient = {};
@@ -1856,33 +1883,75 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
     jobCount: Object.values(g.days).reduce((s, d) => s + d.items.length, 0),
   })).sort((a, b) => b.total - a.total);
 
-  const markPaid = async (bookingId, bookingDate) => {
-    if (bookingDate === date) {
-      setBookings(bookings.map(b => b.id === bookingId ? { ...b, paymentStatus: 'PAID' } : b));
-    }
-    if (savedDays[bookingDate]) {
-      const updatedDays = { ...savedDays, [bookingDate]: { ...savedDays[bookingDate], bookings: savedDays[bookingDate].bookings.map(b => b.id === bookingId ? { ...b, paymentStatus: 'PAID' } : b) } };
-      setSavedDays(updatedDays);
-      try { localStorage.setItem('sparkle_all_days', JSON.stringify(updatedDays)); } catch (e) {}
-    }
+  // Open the payment modal with a single job selected
+  const openPayModalForSingle = (booking) => {
+    setPayModal({
+      items: [booking],
+      clientName: booking.clientName || 'Unknown',
+      date: booking.date,
+      defaultType: booking.paymentType || 'CASH',
+      owedAmount: booking.total,
+    });
   };
 
-  // Mark every unpaid booking for a given client on a given day as paid in one click
-  const markDayPaid = async (dayData) => {
-    const ids = new Set(dayData.items.map(i => i.id));
-    const bookingDate = dayData.date;
-    const confirmMsg = dayData.items.length > 1
-      ? `Mark all ${dayData.items.length} jobs (${Array.from(dayData.cleaners).join(', ')}) for this day as PAID?`
-      : `Mark this job as PAID?`;
-    if (!confirm(confirmMsg)) return;
+  // Open the payment modal with a whole day for a client selected
+  const openPayModalForDay = (clientName, dayData) => {
+    setPayModal({
+      items: dayData.items,
+      clientName,
+      date: dayData.date,
+      defaultType: dayData.items[0]?.paymentType || 'CASH',
+      owedAmount: dayData.total,
+    });
+  };
+
+  // Actually apply the payment when the user confirms in the modal
+  const confirmPayment = ({ paymentType, amountReceived }) => {
+    if (!payModal) return;
+    const ids = new Set(payModal.items.map(i => i.id));
+    const bookingDate = payModal.date;
+    const owed = payModal.owedAmount;
+    const received = Number(amountReceived) || owed;
+    const overpayment = received - owed;
+
+    // Mark bookings paid + record actual paymentType used
+    const applyUpdate = (list) => list.map(b => ids.has(b.id) ? { ...b, paymentStatus: 'PAID', paymentType } : b);
+
     if (bookingDate === date) {
-      setBookings(bookings.map(b => ids.has(b.id) ? { ...b, paymentStatus: 'PAID' } : b));
+      setBookings(applyUpdate(bookings));
     }
     if (savedDays[bookingDate]) {
-      const updatedDays = { ...savedDays, [bookingDate]: { ...savedDays[bookingDate], bookings: savedDays[bookingDate].bookings.map(b => ids.has(b.id) ? { ...b, paymentStatus: 'PAID' } : b) } };
+      const updatedDays = { ...savedDays, [bookingDate]: { ...savedDays[bookingDate], bookings: applyUpdate(savedDays[bookingDate].bookings) } };
       setSavedDays(updatedDays);
       try { localStorage.setItem('sparkle_all_days', JSON.stringify(updatedDays)); } catch (e) {}
     }
+
+    // Handle credit / debit for the client if amounts don't match
+    if (overpayment !== 0) {
+      const cn = payModal.clientName;
+      const existing = clientCredits[cn] || { balance: 0, history: [] };
+      const nextBalance = (existing.balance || 0) + overpayment;
+      const nextCredits = {
+        ...clientCredits,
+        [cn]: {
+          balance: nextBalance,
+          history: [
+            ...(existing.history || []),
+            {
+              date: new Date().toISOString().slice(0, 10),
+              amount: overpayment,
+              type: overpayment > 0 ? 'credit' : 'debit',
+              note: overpayment > 0
+                ? `Overpaid ${overpayment.toFixed(2)} AED on ${bookingDate} payment (received ${received}, owed ${owed})`
+                : `Underpaid ${Math.abs(overpayment).toFixed(2)} AED on ${bookingDate} payment (received ${received}, owed ${owed})`
+            },
+          ],
+        },
+      };
+      saveClientCredits(nextCredits);
+    }
+
+    setPayModal(null);
   };
 
   const today = new Date().setHours(0, 0, 0, 0);
@@ -1926,12 +1995,19 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <label style={{ fontSize: '12px', color: colors.ink + '99', fontWeight: 600, whiteSpace: 'nowrap' }}>
             <CalendarDays size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} />
-            On day:
+            From:
           </label>
           <input
             type="date"
-            value={filterDate}
-            onChange={e => setFilterDate(e.target.value)}
+            value={dateFrom}
+            onChange={e => setDateFrom(e.target.value)}
+            style={{ padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '13px', background: colors.soft + '55', outline: 'none' }}
+          />
+          <label style={{ fontSize: '12px', color: colors.ink + '99', fontWeight: 600, whiteSpace: 'nowrap' }}>To:</label>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={e => setDateTo(e.target.value)}
             style={{ padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '13px', background: colors.soft + '55', outline: 'none' }}
           />
         </div>
@@ -1952,7 +2028,7 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
             <Search size={40} style={{ color: colors.ink + '55', marginBottom: '12px' }} />
             <h3 className="display-font" style={{ margin: '0 0 6px', color: colors.ink, fontSize: '20px', fontWeight: 700 }}>No matches found</h3>
             <p style={{ margin: '0 0 14px', fontSize: '13px', color: colors.ink + '99' }}>
-              Try a different search term{filterDate ? ` or a different date` : ''}.
+              Try a different search term{(dateFrom || dateTo) ? ` or a different date range` : ''}.
             </p>
             <button onClick={clearFilters} className="btn btn-primary btn-sm"><X size={12} /> Clear filters</button>
           </div>
@@ -1965,11 +2041,26 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
         )
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          {groups.map(g => (
+          {groups.map(g => {
+            const credit = clientCredits[g.name];
+            const creditBalance = credit ? credit.balance : 0;
+            return (
             <div key={g.name} style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '12px', overflow: 'hidden' }}>
               <div style={{ padding: '14px 18px', background: colors.soft, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                 <div>
-                  <div className="display-font" style={{ fontSize: '17px', fontWeight: 700 }}>{g.name}</div>
+                  <div className="display-font" style={{ fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    {g.name}
+                    {creditBalance > 0 && (
+                      <span title={`Client credit balance from overpayments — will offset ${creditBalance.toFixed(2)} AED next payment`} style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '99px', background: '#DBEAFE', color: '#1E40AF', letterSpacing: '0.03em' }}>
+                        + {creditBalance.toFixed(0)} AED CREDIT
+                      </span>
+                    )}
+                    {creditBalance < 0 && (
+                      <span title={`Client owes ${Math.abs(creditBalance).toFixed(2)} AED extra from previous underpayments`} style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '99px', background: '#FEE2E2', color: '#991B1B', letterSpacing: '0.03em' }}>
+                        − {Math.abs(creditBalance).toFixed(0)} AED DEBT
+                      </span>
+                    )}
+                  </div>
                   {g.phone && <div style={{ fontSize: '12px', color: colors.ink + 'AA', marginTop: '2px' }}><Phone size={11} style={{ display: 'inline', verticalAlign: 'middle' }} /> <span className="mono">{g.phone}</span></div>}
                 </div>
                 <div style={{ textAlign: 'right' }}>
@@ -2023,8 +2114,8 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
                             <td style={{ padding: '12px 18px', textAlign: 'right', verticalAlign: 'top' }}>
                               <button
                                 className="btn btn-primary btn-sm"
-                                onClick={(e) => { e.stopPropagation(); markDayPaid(day); }}
-                                title={canExpand ? `Mark all ${day.items.length} jobs paid` : 'Mark as paid'}
+                                onClick={(e) => { e.stopPropagation(); openPayModalForDay(g.name, day); }}
+                                title={canExpand ? `Record payment for all ${day.items.length} jobs` : 'Record payment'}
                               >
                                 <Check size={12} /> {canExpand ? 'Mark Day Paid' : 'Mark Paid'}
                               </button>
@@ -2045,9 +2136,9 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
                               <td className="mono" style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{b.total.toFixed(0)}</td>
                               <td style={{ padding: '8px 18px', textAlign: 'right' }}>
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); markPaid(b.id, b.date); }}
+                                  onClick={(e) => { e.stopPropagation(); openPayModalForSingle(b); }}
                                   style={{ fontSize: '11px', padding: '4px 10px', background: 'white', border: `1px solid ${colors.border}`, borderRadius: '6px', cursor: 'pointer', color: colors.ink + 'CC' }}
-                                  title="Mark only this cleaner's job as paid"
+                                  title="Record payment for only this cleaner's job"
                                 >
                                   Mark this only
                                 </button>
@@ -2061,9 +2152,126 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
                 </table>
               </div>
             </div>
-          ))}
+          );})}
         </div>
       )}
+
+      {/* Payment modal - CASH/ONLINE choice + amount received (for credit/debit tracking) */}
+      {payModal && (
+        <PaymentModal
+          modal={payModal}
+          onClose={() => setPayModal(null)}
+          onConfirm={confirmPayment}
+          currentCredit={clientCredits[payModal.clientName]?.balance || 0}
+          colors={colors}
+        />
+      )}
+    </div>
+  );
+}
+
+// Popup that appears when clicking Mark Paid. Lets user pick CASH/ONLINE and enter actual amount received.
+function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
+  const [paymentType, setPaymentType] = useState(modal.defaultType || 'CASH');
+  const [amountReceived, setAmountReceived] = useState(String(modal.owedAmount));
+  const owed = modal.owedAmount;
+  const received = Number(amountReceived) || 0;
+  const diff = received - owed;
+  const effectiveOwed = Math.max(0, owed - Math.max(0, currentCredit));
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ background: 'white', borderRadius: '14px', padding: '24px', maxWidth: '440px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '18px' }}>
+          <div>
+            <h3 className="display-font" style={{ margin: 0, fontSize: '20px', fontWeight: 700 }}>Record Payment</h3>
+            <p style={{ margin: '4px 0 0', fontSize: '13px', color: colors.ink + '99' }}>{modal.clientName} · {modal.date}</p>
+          </div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px', color: colors.ink + '99' }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        {currentCredit > 0 && (
+          <div style={{ padding: '10px 12px', background: '#DBEAFE', borderRadius: '8px', marginBottom: '14px', fontSize: '12px', color: '#1E40AF' }}>
+            💡 This client has <strong>{currentCredit.toFixed(2)} AED credit</strong> from previous overpayments. You can subtract it from the amount received below.
+          </div>
+        )}
+        {currentCredit < 0 && (
+          <div style={{ padding: '10px 12px', background: '#FEE2E2', borderRadius: '8px', marginBottom: '14px', fontSize: '12px', color: '#991B1B' }}>
+            ⚠️ This client owes <strong>{Math.abs(currentCredit).toFixed(2)} AED extra</strong> from previous underpayments. Consider adding it to what they owe you today.
+          </div>
+        )}
+
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '4px' }}>
+            <span style={{ color: colors.ink + '99' }}>Amount owed today</span>
+            <span className="mono" style={{ fontWeight: 700, color: colors.warning }}>{owed.toFixed(2)} AED</span>
+          </div>
+          <div style={{ fontSize: '11px', color: colors.ink + '77' }}>{modal.items.length} {modal.items.length === 1 ? 'job' : 'jobs'} being marked paid</div>
+        </div>
+
+        <label style={{ display: 'block', marginBottom: '14px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Payment method</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            <button
+              onClick={() => setPaymentType('CASH')}
+              style={{ padding: '12px', borderRadius: '10px', border: paymentType === 'CASH' ? `2px solid ${colors.rust}` : `2px solid ${colors.border}`, background: paymentType === 'CASH' ? '#FEE2E2' : 'white', color: paymentType === 'CASH' ? colors.rust : colors.ink, fontWeight: 700, fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+            >
+              💵 CASH
+            </button>
+            <button
+              onClick={() => setPaymentType('ONLINE')}
+              style={{ padding: '12px', borderRadius: '10px', border: paymentType === 'ONLINE' ? `2px solid ${colors.accent}` : `2px solid ${colors.border}`, background: paymentType === 'ONLINE' ? colors.accentLight : 'white', color: paymentType === 'ONLINE' ? colors.accent : colors.ink, fontWeight: 700, fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+            >
+              💳 ONLINE
+            </button>
+          </div>
+        </label>
+
+        <label style={{ display: 'block', marginBottom: '16px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Amount actually received (AED)</div>
+          <input
+            type="number"
+            step="0.01"
+            value={amountReceived}
+            onChange={e => setAmountReceived(e.target.value)}
+            style={{ width: '100%', padding: '12px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '18px', fontWeight: 700, fontFamily: 'monospace', outline: 'none' }}
+            autoFocus
+          />
+          <div style={{ fontSize: '11px', color: colors.ink + '77', marginTop: '6px' }}>
+            Change this if the client paid more or less than owed. The difference will be saved as credit/debt on their account.
+          </div>
+        </label>
+
+        {diff !== 0 && received > 0 && (
+          <div style={{ padding: '10px 12px', background: diff > 0 ? '#DCFCE7' : '#FEF3C7', borderRadius: '8px', marginBottom: '14px', fontSize: '13px', color: diff > 0 ? '#166534' : '#92400E' }}>
+            {diff > 0 ? (
+              <>✅ Overpayment of <strong>{diff.toFixed(2)} AED</strong> will be added as credit balance.</>
+            ) : (
+              <>⚠️ Underpayment of <strong>{Math.abs(diff).toFixed(2)} AED</strong> will be recorded as debt on the client's account.</>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ padding: '10px 18px', border: `1px solid ${colors.border}`, background: 'white', borderRadius: '8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+          <button
+            onClick={() => onConfirm({ paymentType, amountReceived: Number(amountReceived) })}
+            className="btn btn-primary"
+            style={{ padding: '10px 22px', fontSize: '13px' }}
+            disabled={received <= 0}
+          >
+            <Check size={14} /> Confirm Payment
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2880,6 +3088,7 @@ function MonthlyView({ allBookings, CLEANERS, colors, exportMonthlyExcel }) {
 function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colors }) {
   const [mode, setMode] = React.useState('monthly'); // monthly, daily, booking
   const [selectedClient, setSelectedClient] = React.useState('');
+  const [clientSearchQuery, setClientSearchQuery] = React.useState('');
   const now = new Date();
   const [year, setYear] = React.useState(now.getFullYear());
   const [month, setMonth] = React.useState(now.getMonth());
@@ -2900,6 +3109,16 @@ function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colo
     });
     return Object.values(map).sort((a, b) => a.name.localeCompare(b.name));
   }, [allBookings, clients]);
+
+  // Filter the client list by search query (name, address, phone)
+  const filteredClientsForPicker = React.useMemo(() => {
+    const q = clientSearchQuery.trim().toLowerCase();
+    if (!q) return clientsWithBookings;
+    return clientsWithBookings.filter(c => {
+      const blob = `${c.name || ''} ${c.address || ''} ${c.phone || ''}`.toLowerCase();
+      return blob.includes(q);
+    });
+  }, [clientsWithBookings, clientSearchQuery]);
 
   // Filter bookings based on mode
   const invoiceItems = React.useMemo(() => {
@@ -2967,16 +3186,85 @@ function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colo
         </div>
 
         <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>2. Pick the client</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: clientsWithBookings.length > 6 ? 'repeat(auto-fill, minmax(180px, 1fr))' : '1fr', gap: '8px', marginBottom: '20px' }}>
+        <div style={{ marginBottom: '20px' }}>
           {clientsWithBookings.length === 0 ? (
             <div style={{ padding: '20px', textAlign: 'center', color: colors.ink + '66', fontSize: '13px' }}>
               No clients yet. Add bookings on the Bookings tab first.
             </div>
           ) : (
-            <select className="select" value={selectedClient} onChange={e => setSelectedClient(e.target.value)} style={{ gridColumn: '1 / -1' }}>
-              <option value="">— Pick a client —</option>
-              {clientsWithBookings.map(c => <option key={c.name} value={c.name}>{c.name}{c.address ? ` · ${c.address}` : ''}</option>)}
-            </select>
+            <>
+              {/* Search bar for the client list */}
+              <div style={{ position: 'relative', marginBottom: '10px' }}>
+                <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: colors.ink + '77' }} />
+                <input
+                  type="text"
+                  value={clientSearchQuery}
+                  onChange={e => setClientSearchQuery(e.target.value)}
+                  placeholder={`Search among ${clientsWithBookings.length} clients (name, address or phone)…`}
+                  style={{ width: '100%', padding: '10px 12px 10px 38px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '13px', background: colors.soft + '55', outline: 'none' }}
+                />
+                {clientSearchQuery && (
+                  <button
+                    onClick={() => setClientSearchQuery('')}
+                    style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px', color: colors.ink + '99' }}
+                    title="Clear search"
+                  ><X size={14} /></button>
+                )}
+              </div>
+
+              {/* Selected client chip */}
+              {selectedClient && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', background: colors.accentLight, border: `1.5px solid ${colors.accent}`, borderRadius: '8px', marginBottom: '10px' }}>
+                  <Check size={16} style={{ color: colors.accent }} />
+                  <div style={{ flex: 1, fontSize: '13px' }}>
+                    Selected: <strong>{selectedClient}</strong>
+                  </div>
+                  <button
+                    onClick={() => setSelectedClient('')}
+                    style={{ padding: '4px 10px', background: 'white', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}
+                  >Change</button>
+                </div>
+              )}
+
+              {/* Scrollable client list — only visible when no client is selected or search is active */}
+              {(!selectedClient || clientSearchQuery) && (
+                <div style={{ maxHeight: '260px', overflowY: 'auto', border: `1px solid ${colors.border}`, borderRadius: '8px', background: 'white' }}>
+                  {filteredClientsForPicker.length === 0 ? (
+                    <div style={{ padding: '30px 20px', textAlign: 'center', color: colors.ink + '66', fontSize: '13px' }}>
+                      No clients match “{clientSearchQuery}”
+                    </div>
+                  ) : (
+                    filteredClientsForPicker.map(c => (
+                      <button
+                        key={c.name}
+                        onClick={() => { setSelectedClient(c.name); setClientSearchQuery(''); }}
+                        style={{
+                          display: 'block', width: '100%', textAlign: 'left', padding: '10px 14px',
+                          background: selectedClient === c.name ? colors.accentLight : 'transparent',
+                          border: 'none', borderBottom: `1px solid ${colors.border}`, cursor: 'pointer', fontSize: '13px',
+                          color: colors.ink,
+                        }}
+                        onMouseEnter={e => { if (selectedClient !== c.name) e.currentTarget.style.background = colors.soft + '99'; }}
+                        onMouseLeave={e => { if (selectedClient !== c.name) e.currentTarget.style.background = 'transparent'; }}
+                      >
+                        <div style={{ fontWeight: 600 }}>{c.name}</div>
+                        {(c.address || c.phone) && (
+                          <div style={{ fontSize: '11px', color: colors.ink + '99', marginTop: '2px' }}>
+                            {c.address}{c.address && c.phone ? ' · ' : ''}{c.phone}
+                          </div>
+                        )}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+
+              <div style={{ fontSize: '11px', color: colors.ink + '77', marginTop: '6px' }}>
+                {clientSearchQuery
+                  ? `Showing ${filteredClientsForPicker.length} of ${clientsWithBookings.length} clients`
+                  : `${clientsWithBookings.length} clients total`}
+              </div>
+            </>
           )}
         </div>
 
@@ -4275,6 +4563,337 @@ function WhatsAppReminderModal({ client, companyInfo, stats, colors, onClose }) 
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// PAYROLL VIEW — manage each cleaner's monthly salary, bonuses, deductions,
+// attendance and working hours. Data lives in localStorage under sparkle_payroll.
+// Structure: payroll[monthKey][cleanerName] = { salary, bonuses[], deductions[],
+//   attendance{dateISO: 'present'|'absent'|'half'}, workingHours, notes }
+// ============================================================================
+function PayrollView({ payroll, savePayroll, CLEANERS, colors }) {
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth()); // 0-based
+  const [selectedCleaner, setSelectedCleaner] = useState(CLEANERS[0] || '');
+  const [tab, setTab] = useState('summary'); // summary | attendance | bonuses | deductions
+
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const yearOptions = [];
+  for (let y = now.getFullYear() - 2; y <= now.getFullYear() + 1; y++) yearOptions.push(y);
+  const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+  const monthName = `${months[month]} ${year}`;
+
+  // Ensure the record exists for this cleaner + month
+  const record = payroll[monthKey]?.[selectedCleaner] || {
+    salary: 0,
+    bonuses: [],
+    deductions: [],
+    attendance: {},
+    workingHours: 0,
+    notes: '',
+  };
+
+  // Update this cleaner's record for this month
+  const updateRecord = (patch) => {
+    const next = {
+      ...payroll,
+      [monthKey]: {
+        ...(payroll[monthKey] || {}),
+        [selectedCleaner]: { ...record, ...patch },
+      },
+    };
+    savePayroll(next);
+  };
+
+  // Totals
+  const totalBonuses = record.bonuses.reduce((s, b) => s + Number(b.amount || 0), 0);
+  const totalDeductions = record.deductions.reduce((s, d) => s + Number(d.amount || 0), 0);
+  const netPay = Number(record.salary || 0) + totalBonuses - totalDeductions;
+
+  // Days in the selected month
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const daysArray = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+  const attendanceCount = {
+    present: Object.values(record.attendance).filter(v => v === 'present').length,
+    absent: Object.values(record.attendance).filter(v => v === 'absent').length,
+    half: Object.values(record.attendance).filter(v => v === 'half').length,
+  };
+  const workedDays = attendanceCount.present + attendanceCount.half * 0.5;
+
+  const setAttendance = (day, status) => {
+    const dateISO = `${monthKey}-${String(day).padStart(2, '0')}`;
+    const nextAttendance = { ...record.attendance };
+    if (nextAttendance[dateISO] === status) {
+      delete nextAttendance[dateISO]; // toggle off
+    } else {
+      nextAttendance[dateISO] = status;
+    }
+    updateRecord({ attendance: nextAttendance });
+  };
+
+  const addBonus = () => {
+    updateRecord({
+      bonuses: [
+        ...record.bonuses,
+        { id: Date.now(), amount: 0, reason: '', date: new Date().toISOString().slice(0, 10) },
+      ],
+    });
+  };
+  const updateBonus = (id, field, value) => {
+    updateRecord({
+      bonuses: record.bonuses.map(b => b.id === id ? { ...b, [field]: value } : b),
+    });
+  };
+  const removeBonus = (id) => {
+    updateRecord({ bonuses: record.bonuses.filter(b => b.id !== id) });
+  };
+
+  const addDeduction = () => {
+    updateRecord({
+      deductions: [
+        ...record.deductions,
+        { id: Date.now(), amount: 0, reason: '', date: new Date().toISOString().slice(0, 10) },
+      ],
+    });
+  };
+  const updateDeduction = (id, field, value) => {
+    updateRecord({
+      deductions: record.deductions.map(d => d.id === id ? { ...d, [field]: value } : d),
+    });
+  };
+  const removeDeduction = (id) => {
+    updateRecord({ deductions: record.deductions.filter(d => d.id !== id) });
+  };
+
+  const attColor = {
+    present: { bg: '#DCFCE7', border: '#22C55E', text: '#166534' },
+    absent: { bg: '#FEE2E2', border: '#EF4444', text: '#991B1B' },
+    half: { bg: '#FEF3C7', border: '#F59E0B', text: '#92400E' },
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Payroll</h2>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Monthly salary, bonuses, deductions and attendance for each cleaner</p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <select className="select" value={month} onChange={e => setMonth(parseInt(e.target.value))} style={{ width: 'auto' }}>
+            {months.map((m, i) => <option key={i} value={i}>{m}</option>)}
+          </select>
+          <select className="select" value={year} onChange={e => setYear(parseInt(e.target.value))} style={{ width: 'auto' }}>
+            {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Cleaner picker */}
+      <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '12px', padding: '14px', marginBottom: '16px' }}>
+        <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '8px' }}>Select cleaner</div>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          {CLEANERS.map(c => (
+            <button
+              key={c}
+              onClick={() => setSelectedCleaner(c)}
+              style={{
+                padding: '8px 14px', borderRadius: '99px', fontSize: '13px', fontWeight: 600, cursor: 'pointer',
+                background: selectedCleaner === c ? colors.headerGreen : colors.soft,
+                color: selectedCleaner === c ? 'white' : colors.ink,
+                border: `1px solid ${selectedCleaner === c ? colors.headerGreen : colors.border}`,
+              }}
+            >{c}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Top summary */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px', marginBottom: '16px' }}>
+        <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '14px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>Base Salary</div>
+          <div className="display-font mono" style={{ fontSize: '22px', fontWeight: 700, marginTop: '4px' }}>{Number(record.salary || 0).toFixed(0)} <span style={{ fontSize: '13px', color: colors.ink + '99' }}>AED</span></div>
+        </div>
+        <div style={{ background: '#DCFCE7', border: `1px solid #22C55E`, borderRadius: '10px', padding: '14px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#166534', fontWeight: 600 }}>+ Bonuses</div>
+          <div className="display-font mono" style={{ fontSize: '22px', fontWeight: 700, marginTop: '4px', color: '#166534' }}>+{totalBonuses.toFixed(0)} <span style={{ fontSize: '13px' }}>AED</span></div>
+        </div>
+        <div style={{ background: '#FEE2E2', border: `1px solid #EF4444`, borderRadius: '10px', padding: '14px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#991B1B', fontWeight: 600 }}>− Deductions</div>
+          <div className="display-font mono" style={{ fontSize: '22px', fontWeight: 700, marginTop: '4px', color: '#991B1B' }}>−{totalDeductions.toFixed(0)} <span style={{ fontSize: '13px' }}>AED</span></div>
+        </div>
+        <div style={{ background: colors.accentLight, border: `2px solid ${colors.accent}`, borderRadius: '10px', padding: '14px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.accent, fontWeight: 700 }}>Net Pay</div>
+          <div className="display-font mono" style={{ fontSize: '24px', fontWeight: 800, marginTop: '4px', color: colors.accent }}>{netPay.toFixed(0)} <span style={{ fontSize: '13px' }}>AED</span></div>
+        </div>
+        <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '14px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>Days Worked</div>
+          <div className="display-font" style={{ fontSize: '22px', fontWeight: 700, marginTop: '4px' }}>{workedDays} <span style={{ fontSize: '13px', color: colors.ink + '99' }}>/ {daysInMonth}</span></div>
+          <div style={{ fontSize: '10px', color: colors.ink + '77', marginTop: '2px' }}>{attendanceCount.present} present · {attendanceCount.half} half · {attendanceCount.absent} absent</div>
+        </div>
+        <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '14px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>Working Hours</div>
+          <div className="display-font mono" style={{ fontSize: '22px', fontWeight: 700, marginTop: '4px' }}>{Number(record.workingHours || 0).toFixed(0)}h</div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: '4px', borderBottom: `1px solid ${colors.border}`, marginBottom: '16px' }}>
+        {[
+          { id: 'summary', label: 'Salary & Hours', icon: <DollarSign size={14} /> },
+          { id: 'attendance', label: 'Attendance', icon: <CalendarDays size={14} /> },
+          { id: 'bonuses', label: `Bonuses (${record.bonuses.length})`, icon: <TrendingUp size={14} /> },
+          { id: 'deductions', label: `Deductions (${record.deductions.length})`, icon: <AlertCircle size={14} /> },
+        ].map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            style={{
+              padding: '10px 16px', border: 'none', background: 'transparent', cursor: 'pointer',
+              fontSize: '13px', fontWeight: 600,
+              color: tab === t.id ? colors.accent : colors.ink + '99',
+              borderBottom: tab === t.id ? `2px solid ${colors.accent}` : '2px solid transparent',
+              marginBottom: '-1px', display: 'inline-flex', alignItems: 'center', gap: '6px',
+            }}
+          >{t.icon} {t.label}</button>
+        ))}
+      </div>
+
+      {/* Salary + hours tab */}
+      {tab === 'summary' && (
+        <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '12px', padding: '20px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 16px', fontSize: '16px', fontWeight: 700 }}>Salary & Working Hours for {selectedCleaner} · {monthName}</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+            <Field label="Base salary (AED)">
+              <input
+                type="number"
+                className="select"
+                value={record.salary || ''}
+                onChange={e => updateRecord({ salary: Number(e.target.value) || 0 })}
+                placeholder="e.g. 1500"
+              />
+            </Field>
+            <Field label="Total working hours">
+              <input
+                type="number"
+                step="0.5"
+                className="select"
+                value={record.workingHours || ''}
+                onChange={e => updateRecord({ workingHours: Number(e.target.value) || 0 })}
+                placeholder="e.g. 180"
+              />
+            </Field>
+          </div>
+          <div style={{ marginTop: '16px' }}>
+            <Field label="Notes (optional)">
+              <textarea
+                className="select"
+                value={record.notes || ''}
+                onChange={e => updateRecord({ notes: e.target.value })}
+                placeholder="e.g. joined mid-month, awaiting Emirates ID, etc."
+                rows={3}
+                style={{ resize: 'vertical', fontFamily: 'inherit' }}
+              />
+            </Field>
+          </div>
+        </div>
+      )}
+
+      {/* Attendance tab — manual calendar-style grid */}
+      {tab === 'attendance' && (
+        <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '12px', padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+            <h3 className="display-font" style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Attendance for {selectedCleaner} · {monthName}</h3>
+            <div style={{ display: 'flex', gap: '10px', fontSize: '11px', color: colors.ink + '99' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '10px', height: '10px', borderRadius: '3px', background: attColor.present.border }} /> Present</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '10px', height: '10px', borderRadius: '3px', background: attColor.half.border }} /> Half</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '10px', height: '10px', borderRadius: '3px', background: attColor.absent.border }} /> Absent</span>
+            </div>
+          </div>
+          <p style={{ fontSize: '12px', color: colors.ink + '77', margin: '0 0 14px' }}>Click a day to cycle through: <strong>Present → Half → Absent → (blank)</strong>. Or use the three buttons below each date.</p>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '6px' }}>
+            {daysArray.map(d => {
+              const dateISO = `${monthKey}-${String(d).padStart(2, '0')}`;
+              const status = record.attendance[dateISO];
+              const c = status ? attColor[status] : { bg: 'white', border: colors.border, text: colors.ink };
+              const dayName = new Date(year, month, d).toLocaleDateString('en-US', { weekday: 'short' });
+              return (
+                <div key={d} style={{ background: c.bg, border: `1.5px solid ${c.border}`, borderRadius: '8px', padding: '6px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '10px', color: c.text, fontWeight: 600, textTransform: 'uppercase' }}>{dayName}</div>
+                  <div className="display-font" style={{ fontSize: '18px', fontWeight: 700, color: c.text, lineHeight: 1 }}>{d}</div>
+                  <div style={{ display: 'flex', gap: '2px', marginTop: '4px', justifyContent: 'center' }}>
+                    <button onClick={() => setAttendance(d, 'present')} title="Present" style={{ width: '18px', height: '18px', borderRadius: '4px', border: 'none', background: status === 'present' ? attColor.present.border : attColor.present.bg, cursor: 'pointer', color: status === 'present' ? 'white' : attColor.present.text, fontSize: '10px', fontWeight: 700 }}>P</button>
+                    <button onClick={() => setAttendance(d, 'half')} title="Half day" style={{ width: '18px', height: '18px', borderRadius: '4px', border: 'none', background: status === 'half' ? attColor.half.border : attColor.half.bg, cursor: 'pointer', color: status === 'half' ? 'white' : attColor.half.text, fontSize: '10px', fontWeight: 700 }}>H</button>
+                    <button onClick={() => setAttendance(d, 'absent')} title="Absent" style={{ width: '18px', height: '18px', borderRadius: '4px', border: 'none', background: status === 'absent' ? attColor.absent.border : attColor.absent.bg, cursor: 'pointer', color: status === 'absent' ? 'white' : attColor.absent.text, fontSize: '10px', fontWeight: 700 }}>A</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Bonuses tab */}
+      {tab === 'bonuses' && (
+        <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '12px', padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+            <h3 className="display-font" style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Bonuses for {selectedCleaner} · {monthName}</h3>
+            <button className="btn btn-primary btn-sm" onClick={addBonus}><Plus size={12} /> Add bonus</button>
+          </div>
+          {record.bonuses.length === 0 ? (
+            <div style={{ padding: '30px 20px', textAlign: 'center', color: colors.ink + '66', fontSize: '13px' }}>
+              No bonuses yet this month. Click “Add bonus” to record one.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {record.bonuses.map(b => (
+                <div key={b.id} style={{ display: 'grid', gridTemplateColumns: '120px 130px 1fr auto', gap: '8px', alignItems: 'center', padding: '10px', background: '#DCFCE7', border: '1px solid #22C55E', borderRadius: '8px' }}>
+                  <input type="date" className="select" value={b.date || ''} onChange={e => updateBonus(b.id, 'date', e.target.value)} />
+                  <input type="number" className="select" value={b.amount || ''} placeholder="Amount" onChange={e => updateBonus(b.id, 'amount', Number(e.target.value) || 0)} style={{ fontFamily: 'monospace', fontWeight: 700 }} />
+                  <input type="text" className="select" value={b.reason || ''} placeholder="Reason (e.g. good performance, extra job)" onChange={e => updateBonus(b.id, 'reason', e.target.value)} />
+                  <button onClick={() => removeBonus(b.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#991B1B', padding: '6px' }} title="Remove"><Trash2 size={14} /></button>
+                </div>
+              ))}
+              <div style={{ marginTop: '8px', paddingTop: '10px', borderTop: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'flex-end', fontSize: '14px', fontWeight: 700 }}>
+                Total bonuses: <span className="mono" style={{ color: '#166534', marginLeft: '10px' }}>+{totalBonuses.toFixed(2)} AED</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Deductions tab */}
+      {tab === 'deductions' && (
+        <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '12px', padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+            <h3 className="display-font" style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Deductions for {selectedCleaner} · {monthName}</h3>
+            <button className="btn btn-primary btn-sm" onClick={addDeduction}><Plus size={12} /> Add deduction</button>
+          </div>
+          {record.deductions.length === 0 ? (
+            <div style={{ padding: '30px 20px', textAlign: 'center', color: colors.ink + '66', fontSize: '13px' }}>
+              No deductions yet this month. Click “Add deduction” to record one.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {record.deductions.map(d => (
+                <div key={d.id} style={{ display: 'grid', gridTemplateColumns: '120px 130px 1fr auto', gap: '8px', alignItems: 'center', padding: '10px', background: '#FEE2E2', border: '1px solid #EF4444', borderRadius: '8px' }}>
+                  <input type="date" className="select" value={d.date || ''} onChange={e => updateDeduction(d.id, 'date', e.target.value)} />
+                  <input type="number" className="select" value={d.amount || ''} placeholder="Amount" onChange={e => updateDeduction(d.id, 'amount', Number(e.target.value) || 0)} style={{ fontFamily: 'monospace', fontWeight: 700 }} />
+                  <input type="text" className="select" value={d.reason || ''} placeholder="Reason (e.g. absence, uniform, advance repayment)" onChange={e => updateDeduction(d.id, 'reason', e.target.value)} />
+                  <button onClick={() => removeDeduction(d.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#991B1B', padding: '6px' }} title="Remove"><Trash2 size={14} /></button>
+                </div>
+              ))}
+              <div style={{ marginTop: '8px', paddingTop: '10px', borderTop: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'flex-end', fontSize: '14px', fontWeight: 700 }}>
+                Total deductions: <span className="mono" style={{ color: '#991B1B', marginLeft: '10px' }}>−{totalDeductions.toFixed(2)} AED</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
