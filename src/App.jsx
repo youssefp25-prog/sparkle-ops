@@ -3416,15 +3416,18 @@ function InvoicePreviewModal({ items, client, companyInfo, saveCompanyInfo, peri
 
   const handlePrint = () => {
     const printContent = printRef.current.innerHTML;
-    const win = window.open('', '_blank', 'width=900,height=1000');
+    const win = window.open('', '_blank', 'width=900,height=1100');
     win.document.write(`
       <!DOCTYPE html><html><head><title>Invoice ${invoiceNumber}</title>
+      <meta charset="utf-8" />
       <style>
-        @page { size: A4; margin: 15mm; }
-        body { font-family: Arial, sans-serif; margin: 0; padding: 0; color: #1A1A1A; }
+        @page { size: A4; margin: 0; }
+        html, body { margin: 0; padding: 0; color: #1A1A1A; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-family: "Times New Roman", Georgia, serif; }
         * { box-sizing: border-box; }
+        /* Force the invoice card to fill the A4 page cleanly */
+        body > div { border: none !important; border-radius: 0 !important; box-shadow: none !important; }
       </style>
-      </head><body>${printContent}<script>window.onload=()=>{window.print();window.onafterprint=()=>window.close();}</script></body></html>
+      </head><body>${printContent}<script>window.onload=()=>{setTimeout(()=>{window.print();window.onafterprint=()=>window.close();},250);}</script></body></html>
     `);
     win.document.close();
   };
@@ -3519,133 +3522,206 @@ function InvoicePreviewModal({ items, client, companyInfo, saveCompanyInfo, peri
 }
 
 function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineItems, subtotal, totalHours, isPaid, notes, mode, periodLabel, showCleanerColumn, cleanersInInvoice }) {
-  const accent = '#0F4C3A';
-  const paidColor = '#0F4C3A';
+  // Colour palette matching the branded PDF template
+  const brand = {
+    darkNavy: '#0A2E5C',      // top-left banner outer
+    midBlue: '#1E5CAA',       // main brand blue (invoice title, table header, total)
+    lightBlue: '#5B9BD5',     // thin divider lines and secondary accents
+    teal: '#2AA79A',           // thank-you banner + footer strip
+    softGrey: '#F5F5F5',      // alt row and light backgrounds
+    darkText: '#1A1A1A',
+    mutedText: '#666666',
+    labelGrey: '#8E8E8E',
+  };
 
   return (
-    <div style={{ background: 'white', padding: '32px', border: '1px solid #e5e5e5', borderRadius: '8px', position: 'relative', fontFamily: 'Arial, sans-serif', color: '#1A1A1A', fontSize: '13px' }}>
+    <div style={{ background: 'white', border: '1px solid #e5e5e5', borderRadius: '8px', position: 'relative', fontFamily: '"Times New Roman", Georgia, serif', color: brand.darkText, fontSize: '13px', width: '100%', maxWidth: '900px', margin: '0 auto', overflow: 'hidden', minHeight: '1240px', paddingBottom: '110px' }}>
+
+      {/* ============ TOP DIAGONAL BLUE BANNER (top-left) ============ */}
+      <div style={{ position: 'absolute', top: 0, left: 0, width: '55%', height: '90px', overflow: 'hidden', pointerEvents: 'none' }}>
+        {/* Outer dark navy diagonal */}
+        <div style={{
+          position: 'absolute', top: '-30px', left: '-30px', width: '100%', height: '90px',
+          background: brand.darkNavy, transform: 'skewY(-8deg)', transformOrigin: 'top left',
+        }} />
+        {/* Inner mid blue diagonal, offset */}
+        <div style={{
+          position: 'absolute', top: '-15px', left: '-30px', width: '100%', height: '55px',
+          background: brand.midBlue, transform: 'skewY(-8deg)', transformOrigin: 'top left',
+        }} />
+      </div>
+
+      {/* ============ HEADER: logo + company name (top-right) ============ */}
+      <div style={{ padding: '30px 40px 10px', display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-start', minHeight: '110px', position: 'relative', zIndex: 2 }}>
+        <div style={{ textAlign: 'center' }}>
+          {companyInfo.logoDataUrl
+            ? <img src={companyInfo.logoDataUrl} alt="logo" style={{ maxHeight: '70px', display: 'block', marginLeft: 'auto', marginBottom: '6px' }} />
+            : (
+              // Placeholder logo swatch if the user hasn't uploaded a logo yet
+              <div style={{ width: '160px', height: '54px', background: brand.midBlue, borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontFamily: 'Arial, sans-serif', fontWeight: 700, fontSize: '13px', letterSpacing: '0.06em', marginLeft: 'auto', marginBottom: '6px' }}>
+                {companyInfo.name?.toUpperCase() || 'YOUR LOGO'}
+              </div>
+            )}
+          <div style={{ fontWeight: 700, fontSize: '13px', color: brand.midBlue }}>{companyInfo.name}</div>
+          <div style={{ fontSize: '10px', color: brand.mutedText, maxWidth: '280px', margin: '2px 0 0', lineHeight: 1.4 }}>{companyInfo.address}</div>
+          <div style={{ fontSize: '10px', color: brand.mutedText }}>
+            {companyInfo.phone}{companyInfo.email ? ` | ${companyInfo.email}` : ''}
+          </div>
+          {companyInfo.trn && <div style={{ fontSize: '10px', color: brand.mutedText }}>TRN: {companyInfo.trn}</div>}
+        </div>
+      </div>
+
+      {/* ============ INVOICE TITLE + first divider line ============ */}
+      <div style={{ padding: '0 40px', position: 'relative', zIndex: 2 }}>
+        <h1 style={{ margin: '10px 0 6px', fontSize: '26px', fontWeight: 400, color: brand.midBlue, letterSpacing: '0.08em', fontFamily: '"Times New Roman", Georgia, serif' }}>INVOICE</h1>
+        <div style={{ height: '2px', background: brand.lightBlue, marginBottom: '20px' }} />
+      </div>
+
+      {/* PAID stamp (only if all bookings are paid) */}
       {isPaid && (
         <div style={{
-          position: 'absolute', top: '120px', right: '40px',
-          border: `4px solid ${paidColor}`, color: paidColor,
-          padding: '6px 24px', fontSize: '32px', fontWeight: 800,
+          position: 'absolute', top: '180px', right: '60px',
+          border: `4px solid ${brand.midBlue}`, color: brand.midBlue,
+          padding: '6px 24px', fontSize: '30px', fontWeight: 800,
           letterSpacing: '0.1em', transform: 'rotate(-12deg)',
-          opacity: 0.85, fontFamily: 'Arial, sans-serif'
+          opacity: 0.82, fontFamily: 'Arial, sans-serif', zIndex: 3,
         }}>
           PAID
         </div>
       )}
 
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', borderBottom: `3px solid ${accent}`, paddingBottom: '14px' }}>
+      {/* ============ BILL TO + DATE / INVOICE # ============ */}
+      <div style={{ padding: '0 40px', display: 'flex', justifyContent: 'space-between', gap: '20px', marginBottom: '18px' }}>
         <div style={{ flex: 1 }}>
-          <h1 style={{ margin: 0, fontSize: '36px', fontWeight: 800, color: accent, letterSpacing: '-0.02em' }}>INVOICE</h1>
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          {companyInfo.logoDataUrl && <img src={companyInfo.logoDataUrl} alt="logo" style={{ maxHeight: '60px', marginBottom: '8px' }} />}
-          <div style={{ fontWeight: 700, fontSize: '15px', color: accent, marginBottom: '2px' }}>{companyInfo.name}</div>
-          <div style={{ fontSize: '11px', color: '#666', maxWidth: '260px', lineHeight: 1.5 }}>{companyInfo.address}</div>
-          <div style={{ fontSize: '11px', color: '#666' }}>📞 {companyInfo.phone}</div>
-          <div style={{ fontSize: '11px', color: '#666' }}>✉️ {companyInfo.email}</div>
-          {companyInfo.trn && <div style={{ fontSize: '11px', color: '#666' }}>TRN: {companyInfo.trn}</div>}
-        </div>
-      </div>
-
-      {/* Bill To + Date/Number */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', gap: '20px' }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: '11px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700, marginBottom: '4px' }}>Bill To:</div>
-          <div style={{ fontWeight: 700, fontSize: '16px', marginBottom: '2px' }}>{client?.name}</div>
-          <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.5 }}>{client?.address}</div>
-          {client?.phone && <div style={{ fontSize: '12px', color: '#555' }}>📞 {client.phone}</div>}
+          <div style={{ fontSize: '11px', color: brand.labelGrey, textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, marginBottom: '3px' }}>Bill To</div>
+          <div style={{ fontWeight: 700, fontSize: '15px', marginBottom: '2px', fontFamily: 'Arial, sans-serif' }}>{client?.name}</div>
+          <div style={{ fontSize: '12px', color: brand.darkText, lineHeight: 1.4 }}>{client?.address}</div>
+          {client?.phone && <div style={{ fontSize: '12px', color: brand.mutedText }}>{client.phone}</div>}
           {showCleanerColumn && cleanersInInvoice && cleanersInInvoice.length > 1 && (
-            <div style={{ fontSize: '11px', color: '#666', marginTop: '6px', fontStyle: 'italic' }}>
-              Service performed by: <strong>{cleanersInInvoice.join(', ')}</strong>
+            <div style={{ fontSize: '11px', color: brand.mutedText, marginTop: '4px', fontStyle: 'italic' }}>
+              Service performed by: {cleanersInInvoice.join(', ')}
             </div>
           )}
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ marginBottom: '6px' }}>
-            <span style={{ fontSize: '11px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Date: </span>
-            <span style={{ fontWeight: 700, fontSize: '13px' }}>{issueDate}</span>
-          </div>
-          <div>
-            <span style={{ fontSize: '11px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Invoice #: </span>
-            <span style={{ fontWeight: 700, fontSize: '15px', color: accent }}>{invoiceNumber}</span>
-          </div>
+        <div style={{ minWidth: '200px' }}>
+          <table style={{ borderCollapse: 'collapse', fontSize: '12px', width: '100%' }}>
+            <tbody>
+              <tr>
+                <td style={{ padding: '3px 12px 3px 0', color: brand.labelGrey, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, fontSize: '10px' }}>Date</td>
+                <td style={{ padding: '3px 0', fontWeight: 700, textAlign: 'right', fontFamily: 'Arial, sans-serif' }}>{issueDate}</td>
+              </tr>
+              <tr>
+                <td style={{ padding: '3px 12px 3px 0', color: brand.labelGrey, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, fontSize: '10px' }}>Invoice #</td>
+                <td style={{ padding: '3px 0', fontWeight: 700, textAlign: 'right', fontFamily: 'Arial, sans-serif', color: brand.midBlue }}>{invoiceNumber}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
-      {/* Line Items Table */}
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '16px', fontSize: '12px' }}>
-        <thead>
-          <tr style={{ background: accent, color: 'white' }}>
-            <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Description</th>
-            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '70px' }}>Job Date</th>
-            {showCleanerColumn && <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '85px' }}>Cleaner</th>}
-            {mode === 'booking' && <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '90px' }}>Time</th>}
-            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '60px' }}>Hours</th>
-            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '70px' }}>Rate / hr</th>
-            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '70px' }}>Materials</th>
-            <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '90px' }}>Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          {lineItems.map((item, idx) => (
-            <tr key={idx} style={{ background: idx % 2 === 0 ? '#FAFAFA' : 'white', borderBottom: '1px solid #e5e5e5' }}>
-              <td style={{ padding: '8px', verticalAlign: 'top' }}>
-                {idx === 0 ? <span style={{ fontWeight: 600 }}>{item.description}</span> : ''}
-              </td>
-              <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>{item.date}</td>
-              {showCleanerColumn && <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top', fontWeight: 600 }}>{item.cleaner}</td>}
-              {mode === 'booking' && <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top', fontFamily: 'monospace', fontSize: '11px' }}>{item.timing}</td>}
-              <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>{item.hours}</td>
-              <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>{item.rate}</td>
-              <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>{item.materials}</td>
-              <td style={{ padding: '8px', textAlign: 'right', verticalAlign: 'top', fontWeight: 600 }}>{item.amount.toFixed(2)}</td>
+      {/* ============ LINE ITEMS TABLE ============ */}
+      <div style={{ padding: '0 40px' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '18px', fontSize: '12px' }}>
+          <thead>
+            <tr style={{ background: brand.midBlue, color: 'white' }}>
+              <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 700, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'Arial, sans-serif' }}>Description</th>
+              <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', width: '70px', fontFamily: 'Arial, sans-serif' }}>Job Date</th>
+              {showCleanerColumn && <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', width: '85px', fontFamily: 'Arial, sans-serif' }}>Cleaner</th>}
+              {mode === 'booking' && <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', width: '90px', fontFamily: 'Arial, sans-serif' }}>Time</th>}
+              <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', width: '60px', fontFamily: 'Arial, sans-serif' }}>Hours</th>
+              <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', width: '70px', fontFamily: 'Arial, sans-serif' }}>Rate / hr</th>
+              <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 700, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', width: '100px', fontFamily: 'Arial, sans-serif' }}>Amount (AED)</th>
             </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr style={{ background: '#F0EBE0' }}>
-            <td style={{ padding: '8px', fontWeight: 700 }}>Total hours</td>
-            <td style={{ padding: '8px', textAlign: 'center', fontWeight: 700 }}></td>
-            {showCleanerColumn && <td style={{ padding: '8px' }}></td>}
-            {mode === 'booking' && <td style={{ padding: '8px' }}></td>}
-            <td style={{ padding: '8px', textAlign: 'center', fontWeight: 700 }}>{totalHours.toFixed(1)}</td>
-            <td colSpan="2" style={{ padding: '8px', textAlign: 'right', fontWeight: 700 }}>Total</td>
-            <td style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 800, fontSize: '15px', color: accent, borderTop: `2px solid ${accent}` }}>
-              AED {subtotal.toFixed(2)}
-            </td>
-          </tr>
-        </tfoot>
-      </table>
+          </thead>
+          <tbody>
+            {lineItems.map((item, idx) => (
+              <tr key={idx} style={{ background: idx % 2 === 0 ? brand.softGrey : 'white' }}>
+                <td style={{ padding: '9px 8px', verticalAlign: 'top' }}>
+                  {idx === 0 ? <span style={{ fontWeight: 700, fontFamily: 'Arial, sans-serif' }}>{item.description}</span> : ''}
+                </td>
+                <td style={{ padding: '9px 8px', textAlign: 'center', verticalAlign: 'top' }}>{item.date}</td>
+                {showCleanerColumn && <td style={{ padding: '9px 8px', textAlign: 'center', verticalAlign: 'top' }}>{item.cleaner}</td>}
+                {mode === 'booking' && <td style={{ padding: '9px 8px', textAlign: 'center', verticalAlign: 'top', fontFamily: 'monospace', fontSize: '11px' }}>{item.timing}</td>}
+                <td style={{ padding: '9px 8px', textAlign: 'center', verticalAlign: 'top' }}>{item.hours.toFixed(1)}</td>
+                <td style={{ padding: '9px 8px', textAlign: 'center', verticalAlign: 'top' }}>{item.rate.toFixed(2)}</td>
+                <td style={{ padding: '9px 8px', textAlign: 'right', verticalAlign: 'top' }}>{item.amount.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
 
-      {/* Notes from user */}
-      {notes && (
-        <div style={{ background: '#FFF8E7', padding: '10px 14px', borderRadius: '6px', marginBottom: '14px', fontSize: '12px', color: '#555', borderLeft: `3px solid ${accent}` }}>
-          {notes}
+        {/* Thin blue divider before totals */}
+        <div style={{ height: '1px', background: brand.lightBlue, marginBottom: '14px' }} />
+
+        {/* ============ TOTAL DUE (right-aligned, brand blue) ============ */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
+          <div style={{ fontSize: '12px', color: brand.mutedText }}>
+            Total hours: <strong style={{ color: brand.darkText, fontFamily: 'Arial, sans-serif' }}>{totalHours.toFixed(1)}</strong>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: '11px', color: brand.labelGrey, textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>Total Due</div>
+            <div style={{ fontSize: '26px', fontWeight: 800, color: brand.midBlue, marginTop: '3px', fontFamily: 'Arial, sans-serif' }}>AED {subtotal.toFixed(2)}</div>
+          </div>
         </div>
-      )}
 
-      {/* Thank you */}
-      <div style={{ textAlign: 'center', padding: '14px', fontWeight: 700, fontSize: '15px', color: accent, letterSpacing: '0.05em', marginBottom: '14px' }}>
-        THANK YOU FOR YOUR BUSINESS!
-      </div>
-
-      {/* Bank details */}
-      <div style={{ background: '#F0EBE0', padding: '14px', borderRadius: '6px', fontSize: '11px', lineHeight: 1.6 }}>
-        <div style={{ fontWeight: 700, color: accent, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>Bank Details</div>
-        <div><strong>{companyInfo.bankName}</strong></div>
-        <div>{companyInfo.bankBranch}</div>
-        <div>Account No: <span className="mono">{companyInfo.accountNo}</span></div>
-        <div>IBAN: <span className="mono">{companyInfo.iban}</span></div>
-        <div>SWIFT: <span className="mono">{companyInfo.swift}</span></div>
-        {companyInfo.bankNote && (
-          <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #d4cfc0', fontSize: '10px', color: '#666', whiteSpace: 'pre-line' }}>
-            <strong>Note:</strong> {companyInfo.bankNote}
+        {/* Notes from user */}
+        {notes && (
+          <div style={{ background: '#EBF3FB', padding: '10px 14px', borderRadius: '4px', marginBottom: '14px', fontSize: '11px', color: '#333', borderLeft: `3px solid ${brand.midBlue}` }}>
+            {notes}
           </div>
         )}
+
+        {/* ============ THANK YOU banner (teal) ============ */}
+        <div style={{ textAlign: 'center', padding: '20px 10px', fontWeight: 700, fontSize: '15px', color: brand.teal, letterSpacing: '0.15em', marginBottom: '14px', fontFamily: '"Times New Roman", Georgia, serif' }}>
+          THANK YOU FOR YOUR BUSINESS!
+        </div>
+
+        {/* Thin blue divider */}
+        <div style={{ height: '1px', background: brand.lightBlue, marginBottom: '18px' }} />
+
+        {/* ============ BANK DETAILS + PAYMENT NOTES ============ */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', marginBottom: '20px', fontSize: '11px', lineHeight: 1.6 }}>
+          <div>
+            <div style={{ fontWeight: 700, color: brand.darkText, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '5px', fontFamily: 'Arial, sans-serif' }}>BANK DETAILS</div>
+            <div style={{ fontWeight: 700 }}>{companyInfo.bankName}</div>
+            <div>{companyInfo.bankBranch}</div>
+            <div>Account No: {companyInfo.accountNo}</div>
+            <div>IBAN: {companyInfo.iban}</div>
+            <div>SWIFT: {companyInfo.swift}</div>
+          </div>
+          {companyInfo.bankNote && (
+            <div>
+              <div style={{ fontWeight: 700, color: brand.darkText, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '5px', fontFamily: 'Arial, sans-serif' }}>PAYMENT NOTES</div>
+              <div style={{ whiteSpace: 'pre-line', color: brand.darkText }}>{companyInfo.bankNote}</div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ============ BOTTOM DIAGONAL BANNER + FOOTER ============ */}
+      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '95px', overflow: 'hidden', pointerEvents: 'none' }}>
+        {/* Right teal diagonal (outer) */}
+        <div style={{
+          position: 'absolute', bottom: '-25px', right: '-40px', width: '65%', height: '85px',
+          background: brand.darkNavy, transform: 'skewY(-8deg)', transformOrigin: 'bottom right',
+        }} />
+        {/* Inner mid blue */}
+        <div style={{
+          position: 'absolute', bottom: '-10px', right: '-40px', width: '65%', height: '55px',
+          background: brand.midBlue, transform: 'skewY(-8deg)', transformOrigin: 'bottom right',
+        }} />
+      </div>
+
+      {/* Footer content (contact info at bottom) */}
+      <div style={{ position: 'absolute', bottom: '20px', left: '40px', right: '40px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '20px', flexWrap: 'wrap', zIndex: 3, fontSize: '11px', color: brand.darkText, fontFamily: 'Arial, sans-serif', fontWeight: 600 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+          <div>📞 +{companyInfo.phone?.replace(/^\+?/, '971 ') || '971 50 332 7215'}</div>
+          <div>📍 {companyInfo.address}</div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', textAlign: 'right', color: 'white' }}>
+          {companyInfo.email && <div>✉ {companyInfo.email}</div>}
+          <div>🌐 www.arhomeservices.ae</div>
+        </div>
       </div>
     </div>
   );
