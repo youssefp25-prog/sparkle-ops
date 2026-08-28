@@ -799,11 +799,10 @@ export default function CleaningApp() {
     const monthName = monthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
     const monthNameShort = monthStart.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }).replace(' ', '_');
 
-    // Filter bookings for this month
-    const monthBookings = allBookingsWithDate.filter(b => {
-      const d = new Date(b.date);
-      return d >= monthStart && d <= monthEnd;
-    });
+    // Filter bookings for this month — use STRING match on 'YYYY-MM' prefix to avoid
+    // the timezone bug that would drop the last day of the month (e.g. July 31 in UTC+4).
+    const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+    const monthBookings = allBookingsWithDate.filter(b => b.date && b.date.startsWith(monthKey));
 
     if (monthBookings.length === 0) {
       showStatus('No data for this month');
@@ -1317,7 +1316,7 @@ export default function CleaningApp() {
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
         {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={CLEANERS} updateBooking={updateBooking} />}
-        {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
+        {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} currentDate={date} currentBookings={bookings} savedDays={savedDays} />}
         {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} />}
         {view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} colors={colors} />}
         {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} cloudStatus={cloudStatus} lastSync={lastSync} bookings={bookings} savedDays={savedDays} clients={clients} contracts={contracts} cleanerHomes={cleanerHomes} officeAddress={officeAddress} expenses={expenses} setCloudStatus={setCloudStatus} setLastSync={setLastSync} />}
@@ -2923,10 +2922,10 @@ function MonthlyView({ allBookings, CLEANERS, colors, exportMonthlyExcel }) {
   const monthStart = new Date(year, month, 1);
   const monthEnd = new Date(year, month + 1, 0);
   const monthName = monthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-  const filtered = allBookings.filter(b => {
-    const d = new Date(b.date);
-    return d >= monthStart && d <= monthEnd;
-  });
+  // Use string prefix match ('YYYY-MM') to avoid the UTC/local-time bug that dropped
+  // the 31st of the month in Abu Dhabi (UTC+4) — see also invoiceItems in InvoicesView.
+  const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+  const filtered = allBookings.filter(b => b.date && b.date.startsWith(monthKey));
 
   const totalJobs = filtered.length;
   const totalHrs = filtered.reduce((s, b) => s + (b.hours || 0), 0);
@@ -3085,7 +3084,7 @@ function MonthlyView({ allBookings, CLEANERS, colors, exportMonthlyExcel }) {
   );
 }
 
-function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colors }) {
+function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colors, currentDate, currentBookings, savedDays }) {
   const [mode, setMode] = React.useState('monthly'); // monthly, daily, booking
   const [selectedClient, setSelectedClient] = React.useState('');
   const [clientSearchQuery, setClientSearchQuery] = React.useState('');
@@ -3124,12 +3123,16 @@ function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colo
   const invoiceItems = React.useMemo(() => {
     if (!selectedClient) return [];
     if (mode === 'monthly') {
-      const monthStart = new Date(year, month, 1);
-      const monthEnd = new Date(year, month + 1, 0);
+      // IMPORTANT: We compare dates as STRINGS ('YYYY-MM-DD') instead of Date objects,
+      // because `new Date("YYYY-MM-DD")` treats the date as UTC midnight and then converts
+      // to the local timezone. In Abu Dhabi (UTC+4), that would silently push the 31st of
+      // any month back to the 30th (or the last day of February into January), causing the
+      // last day of the month to be dropped from monthly invoices.
+      const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`; // e.g. '2026-07'
       return allBookings.filter(b => {
         if (b.clientName !== selectedClient) return false;
-        const d = new Date(b.date);
-        return d >= monthStart && d <= monthEnd;
+        if (!b.date) return false;
+        return b.date.startsWith(monthKey); // catches 2026-07-01 through 2026-07-31
       }).sort((a, b) => a.date.localeCompare(b.date));
     }
     if (mode === 'daily') {
@@ -3144,6 +3147,27 @@ function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colo
 
   const subtotal = invoiceItems.reduce((s, b) => s + (b.total || 0), 0);
   const totalHours = invoiceItems.reduce((s, b) => s + (b.hours || 0), 0);
+
+  // Analyze which days of the selected month have NOT been saved yet.
+  // This catches the classic bug where the user forgets to click "Save Day" and
+  // then generates a monthly invoice that's missing some of the days' work.
+  const monthCoverage = React.useMemo(() => {
+    if (mode !== 'monthly') return null;
+    const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const today = new Date();
+    const isThisMonth = today.getFullYear() === year && today.getMonth() === month;
+    // Only warn about days up to today (don't warn about future days in the current month)
+    const lastDayToCheck = isThisMonth ? today.getDate() : daysInMonth;
+    const unsavedDays = [];
+    for (let d = 1; d <= lastDayToCheck; d++) {
+      const dateStr = `${monthKey}-${String(d).padStart(2, '0')}`;
+      if (!savedDays || !savedDays[dateStr]) {
+        unsavedDays.push(dateStr);
+      }
+    }
+    return { totalDays: lastDayToCheck, unsavedDays, isThisMonth };
+  }, [mode, year, month, savedDays]);
 
   // Months
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -3170,6 +3194,30 @@ function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colo
           Next invoice #: <span className="mono" style={{ fontWeight: 700, color: colors.accent }}>{companyInfo.invoiceCounter}</span>
         </div>
       </div>
+
+      {/* ============ UNSAVED-DAY WARNING BANNER ============ */}
+      {/*
+        A common cause of missing bookings on monthly invoices: the user enters
+        bookings for a day but forgets to click "Save Day". The Deployment sheet
+        and daily view show them (from live state), but the Invoice pulls only
+        from `savedDays`. This banner catches that case and warns the user.
+      */}
+      {(() => {
+        const hasUnsavedForToday = currentBookings && currentBookings.some(b => (b.clientName || b.location) && (b.timing || b.cleaner));
+        const isDaySaved = savedDays && savedDays[currentDate];
+        if (hasUnsavedForToday && !isDaySaved) {
+          return (
+            <div style={{ background: '#FEF3C7', border: '1.5px solid #F59E0B', borderRadius: '10px', padding: '12px 16px', marginBottom: '16px', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+              <AlertCircle size={20} style={{ color: '#92400E', flexShrink: 0, marginTop: '1px' }} />
+              <div style={{ flex: 1, fontSize: '13px', color: '#78350F' }}>
+                <strong>Heads up:</strong> the bookings you have open for <strong>{currentDate}</strong> haven&apos;t been saved yet.
+                They won&apos;t appear on invoices or monthly reports until you go back to the <strong>Bookings</strong> tab and click <strong>Save Day</strong>.
+              </div>
+            </div>
+          );
+        }
+        return null;
+      })()}
 
       <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px', marginBottom: '20px' }}>
         <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>1. Choose invoice type</h3>
@@ -3349,6 +3397,33 @@ function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colo
             <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>4. Optional notes</h3>
             <textarea className="input" rows="2" placeholder="e.g. Thank you for your continued business" value={invoiceNotes} onChange={e => setInvoiceNotes(e.target.value)} style={{ resize: 'vertical', marginBottom: '20px' }} />
 
+            {/* Warn if any days of the selected month are unsaved (root cause of "missing days" on invoices) */}
+            {mode === 'monthly' && monthCoverage && monthCoverage.unsavedDays.length > 0 && (
+              <div style={{ background: '#FEF3C7', border: '1.5px solid #F59E0B', borderRadius: '10px', padding: '12px 16px', marginBottom: '12px', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                <AlertCircle size={20} style={{ color: '#92400E', flexShrink: 0, marginTop: '1px' }} />
+                <div style={{ flex: 1, fontSize: '13px', color: '#78350F' }}>
+                  <div style={{ fontWeight: 700, marginBottom: '4px' }}>⚠️ Some days in {months[month]} {year} haven&apos;t been saved</div>
+                  <div style={{ fontSize: '12px', marginBottom: '6px' }}>
+                    {monthCoverage.unsavedDays.length} of {monthCoverage.totalDays} day{monthCoverage.totalDays !== 1 ? 's' : ''} in this month {monthCoverage.unsavedDays.length === 1 ? 'has' : 'have'} no saved bookings.
+                    If you had jobs on those days but forgot to click <strong>Save Day</strong>, they won&apos;t appear on this invoice.
+                  </div>
+                  <details style={{ fontSize: '11px' }}>
+                    <summary style={{ cursor: 'pointer', color: '#78350F', fontWeight: 600 }}>Show unsaved dates ({monthCoverage.unsavedDays.length})</summary>
+                    <div style={{ marginTop: '6px', fontFamily: 'monospace', lineHeight: 1.8 }}>
+                      {monthCoverage.unsavedDays.map(d => {
+                        const dayNum = parseInt(d.slice(8, 10), 10);
+                        const dow = new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+                        return <span key={d} style={{ display: 'inline-block', padding: '2px 8px', margin: '2px 4px 2px 0', background: 'white', borderRadius: '4px', border: '1px solid #F59E0B' }}>{dow} {dayNum}</span>;
+                      })}
+                    </div>
+                    <div style={{ marginTop: '8px', color: '#78350F' }}>
+                      To fix: open each date in the Bookings tab, check if bookings are there, then click <strong>Save Day</strong>.
+                    </div>
+                  </details>
+                </div>
+              </div>
+            )}
+
             {invoiceItems.length > 0 && (
               <div style={{ background: colors.accentLight, border: `1.5px solid ${colors.accent}`, padding: '14px 18px', borderRadius: '10px', marginBottom: '16px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
@@ -3465,9 +3540,12 @@ function InvoicePreviewModal({ items, client, companyInfo, saveCompanyInfo, peri
   };
 
   // Build line items - one row per booking (now includes cleaner column for multi-cleaner invoices)
+  // NOTE: We parse the day directly from the 'YYYY-MM-DD' string (not via `new Date()`),
+  // because `new Date("2026-07-31").getDate()` returns 30 in UTC+4 zones like Abu Dhabi —
+  // that's the bug that caused invoices to show only 30 days for July, August, etc.
   const lineItems = items.map(b => ({
     description: titleByMode[mode],
-    date: new Date(b.date).getDate(),
+    date: b.date ? parseInt(b.date.slice(8, 10), 10) : '',
     timing: b.timing || '',
     hours: b.hours,
     rate: b.pricePerHour,
