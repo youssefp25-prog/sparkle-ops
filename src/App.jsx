@@ -9,6 +9,21 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const CLEANERS = ['Leah', 'Eva', 'Zainab', 'Roselyn', 'Coline', 'Angel','Sara','Souma', 'Razelle'];
+
+// Payroll roster: list of employees who get a monthly salary. Includes cleaners AND non-cleaners
+// (like supervisors, drivers, admins). Each has a default salary that the "Generate All Salaries"
+// button uses to fill in the Payroll tab in one click. Edit the amounts here to change defaults.
+// Order = display order in the payroll table.
+const PAYROLL_ROSTER = [
+  { name: 'Leah',    defaultSalary: 1800, role: 'Cleaner' },
+  { name: 'Razelle', defaultSalary: 1800, role: 'Cleaner' },
+  { name: 'Malek',   defaultSalary: 3350, role: 'Supervisor' }, // Not a cleaner — payroll only
+  { name: 'Roselyn', defaultSalary: 1800, role: 'Cleaner' },
+  { name: 'Eva',     defaultSalary: 1800, role: 'Cleaner' },
+  { name: 'Angel',   defaultSalary: 1800, role: 'Cleaner' },
+  { name: 'Zainab',  defaultSalary: 1800, role: 'Cleaner' },
+  { name: 'Coline',  defaultSalary: 1800, role: 'Cleaner' },
+];
 const PICKUP_TYPES = ['HOME', 'OFFICE'];
 const EXPENSE_CATEGORIES = ['Salaries', 'Transport', 'Materials', 'Marketing', 'Rent', 'Utilities', 'Maintenance/Repairs', 'PPE & Uniforms', 'Staff Meals/Allowances', 'Office Supplies', 'Government Fees', 'Bank Charges', 'Software/Subscriptions', 'Fuel', 'Vehicle Service', 'Miscellaneous'];
 const EXPENSE_PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Credit Card', 'Cheque', 'Online Gateway'];
@@ -1317,8 +1332,8 @@ export default function CleaningApp() {
         {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={CLEANERS} updateBooking={updateBooking} />}
         {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} currentDate={date} currentBookings={bookings} savedDays={savedDays} />}
-        {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} payroll={payroll} CLEANERS={CLEANERS} />}
-        {view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} colors={colors} />}
+        {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} payroll={payroll} savePayroll={savePayroll} PAYROLL_ROSTER={PAYROLL_ROSTER} />}
+        {view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} />}
         {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} cloudStatus={cloudStatus} lastSync={lastSync} bookings={bookings} savedDays={savedDays} clients={clients} contracts={contracts} cleanerHomes={cleanerHomes} officeAddress={officeAddress} expenses={expenses} setCloudStatus={setCloudStatus} setLastSync={setLastSync} />}
       </div>
 
@@ -4160,7 +4175,7 @@ function LocationPickerModal({ title, initialLat, initialLng, initialAddress, on
   );
 }
 
-function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWithCalc, allBookings, payroll, CLEANERS }) {
+function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWithCalc, allBookings, payroll, savePayroll, PAYROLL_ROSTER }) {
   const [editing, setEditing] = useState(null);
   const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
@@ -4206,24 +4221,45 @@ function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWi
   const monthTotal = filtered.reduce((s, e) => s + parseFloat(e.amount || 0), 0);
 
   // ============ PAYROLL SUMMARY (pulls from Payroll tab data) ============
-  // For the selected month, build one row per cleaner with:
+  // For the selected month, build one row per employee with:
   //   Base Salary | Bonuses (Incentive) | Deductions | Net Total
   // Grand total then adds "Other Expenses" (the regular expenses table) at the bottom.
   const payrollForMonth = (payroll && payroll[monthKeyFilter]) || {};
-  const cleanerList = CLEANERS || [];
-  const payrollRows = cleanerList.map(name => {
-    const rec = payrollForMonth[name] || { salary: 0, bonuses: [], deductions: [] };
+  const rosterList = PAYROLL_ROSTER || [];
+  const payrollRows = rosterList.map(person => {
+    const rec = payrollForMonth[person.name] || { salary: 0, bonuses: [], deductions: [] };
     const salary = Number(rec.salary || 0);
     const bonuses = (rec.bonuses || []).reduce((s, b) => s + Number(b.amount || 0), 0);
     const deductions = (rec.deductions || []).reduce((s, d) => s + Number(d.amount || 0), 0);
     const net = salary + bonuses - deductions;
-    return { name, salary, bonuses, deductions, net };
+    return { name: person.name, role: person.role, defaultSalary: person.defaultSalary, salary, bonuses, deductions, net };
   });
   const payrollTotalSalary = payrollRows.reduce((s, r) => s + r.salary, 0);
   const payrollTotalBonuses = payrollRows.reduce((s, r) => s + r.bonuses, 0);
   const payrollTotalDeductions = payrollRows.reduce((s, r) => s + r.deductions, 0);
   const payrollTotalNet = payrollRows.reduce((s, r) => s + r.net, 0);
   const grandTotal = payrollTotalNet + monthTotal;
+
+  // Count how many people have a salary already set for this month
+  const filledSalaries = payrollRows.filter(r => r.salary > 0).length;
+  const allSalariesFilled = filledSalaries === rosterList.length && rosterList.length > 0;
+
+  // ONE-CLICK: fill in every employee's default salary for the selected month.
+  // Preserves any existing bonuses/deductions; only overwrites the base salary.
+  const generateAllSalaries = () => {
+    if (rosterList.length === 0) return;
+    const msg = filledSalaries > 0
+      ? `This will set default salaries for ${rosterList.length} employees for ${months[filterMonth]} ${filterYear}, overwriting any existing base salary values (bonuses & deductions will be preserved). Continue?`
+      : `Set default salaries for ${rosterList.length} employees for ${months[filterMonth]} ${filterYear}?`;
+    if (!confirm(msg)) return;
+    const monthData = { ...(payroll[monthKeyFilter] || {}) };
+    rosterList.forEach(person => {
+      const existing = monthData[person.name] || { salary: 0, bonuses: [], deductions: [], attendance: {}, workingHours: 0, notes: '' };
+      monthData[person.name] = { ...existing, salary: person.defaultSalary };
+    });
+    savePayroll({ ...payroll, [monthKeyFilter]: monthData });
+  };
+
 
 
   // Calculate revenue for the same period
@@ -4329,17 +4365,31 @@ function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWi
       </div>
 
       {/* ============ MONTHLY PAYROLL SUMMARY TABLE ============ */}
-      {/* Rolls up salary + bonuses (incentives) − deductions per cleaner for the selected month.
-          Data comes from the Payroll tab. If a cleaner has no record for the month, they show 0s.
+      {/* Rolls up salary + bonuses (incentives) − deductions per employee for the selected month.
+          Data comes from the Payroll tab. If an employee has no record for the month, they show 0s.
           The GRAND TOTAL at the bottom includes both payroll AND "Other Expenses" for the same month. */}
       <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px', marginBottom: '20px', overflow: 'hidden' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
           <div>
             <h3 className="display-font" style={{ margin: 0, fontSize: '17px', fontWeight: 700 }}>Monthly Payroll Summary · {months[filterMonth]} {filterYear}</h3>
-            <p style={{ margin: '4px 0 0', fontSize: '12px', color: colors.ink + '99' }}>Salary + Incentives − Deductions per employee. Numbers come from the Payroll tab.</p>
+            <p style={{ margin: '4px 0 0', fontSize: '12px', color: colors.ink + '99' }}>
+              Salary + Incentives − Deductions per employee. {filledSalaries === 0 ? 'Click Generate to fill default salaries.' : `${filledSalaries} of ${rosterList.length} salaries set.`}
+            </p>
           </div>
-          <div style={{ padding: '6px 12px', background: colors.accentLight, border: `1px solid ${colors.accent}`, borderRadius: '8px', fontSize: '11px', color: colors.accent, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-            <Users size={12} /> {cleanerList.length} employees
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {rosterList.length > 0 && (
+              <button
+                onClick={generateAllSalaries}
+                className="btn btn-primary"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', fontSize: '13px' }}
+                title="One click fills every employee's default salary for this month"
+              >
+                <RefreshCw size={13} /> {allSalariesFilled ? 'Regenerate' : 'Generate'} All Salaries
+              </button>
+            )}
+            <div style={{ padding: '6px 12px', background: colors.accentLight, border: `1px solid ${colors.accent}`, borderRadius: '8px', fontSize: '11px', color: colors.accent, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <Users size={12} /> {rosterList.length} employees
+            </div>
           </div>
         </div>
 
@@ -4359,14 +4409,24 @@ function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWi
               {payrollRows.length === 0 ? (
                 <tr>
                   <td colSpan="6" style={{ padding: '30px 20px', textAlign: 'center', color: colors.ink + '66', fontSize: '13px', background: colors.soft }}>
-                    No cleaners set up yet. Add them in the Payroll tab or Settings.
+                    No employees in the payroll roster yet.
                   </td>
                 </tr>
               ) : payrollRows.map((r, idx) => (
                 <tr key={r.name} style={{ background: idx % 2 === 0 ? colors.soft + '55' : 'white', borderBottom: `1px solid ${colors.border}` }}>
                   <td style={{ padding: '10px 12px', color: colors.ink + '99', fontWeight: 600 }}>{idx + 1}</td>
-                  <td style={{ padding: '10px 12px', fontWeight: 700, fontFamily: 'Arial, sans-serif', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{r.name}</td>
-                  <td className="mono" style={{ padding: '10px 12px', textAlign: 'right' }}>{r.salary.toFixed(0)} AED</td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <div style={{ fontWeight: 700, fontFamily: 'Arial, sans-serif', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{r.name}</div>
+                    {r.role && r.role !== 'Cleaner' && (
+                      <div style={{ fontSize: '10px', color: colors.ink + '77', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{r.role}</div>
+                    )}
+                  </td>
+                  <td className="mono" style={{ padding: '10px 12px', textAlign: 'right', color: r.salary === 0 ? colors.ink + '55' : colors.ink }}>
+                    {r.salary.toFixed(0)} AED
+                    {r.salary === 0 && r.defaultSalary && (
+                      <div style={{ fontSize: '9px', color: colors.ink + '55', marginTop: '2px' }}>default: {r.defaultSalary}</div>
+                    )}
+                  </td>
                   <td className="mono" style={{ padding: '10px 12px', textAlign: 'right', color: r.bonuses > 0 ? '#166534' : colors.ink + '77' }}>{r.bonuses.toFixed(0)} AED</td>
                   <td className="mono" style={{ padding: '10px 12px', textAlign: 'right', color: r.deductions > 0 ? '#991B1B' : colors.ink + '77' }}>{r.deductions.toFixed(0)} AED</td>
                   <td className="mono" style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, color: colors.accent, fontSize: '14px' }}>{r.net.toFixed(0)} AED</td>
@@ -4383,6 +4443,11 @@ function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWi
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Helper note for how to add incentives/deductions */}
+        <div style={{ marginTop: '10px', padding: '10px 14px', background: colors.accentLight, borderRadius: '8px', fontSize: '12px', color: colors.ink }}>
+          💡 <strong>Adding incentives or deductions?</strong> Go to the <strong>Payroll</strong> tab, pick the employee, then use the <strong>Bonuses</strong> or <strong>Deductions</strong> sub-tab. The totals here will update automatically.
         </div>
 
         {/* Other Expenses subtotal row */}
@@ -4832,11 +4897,13 @@ function WhatsAppReminderModal({ client, companyInfo, stats, colors, onClose }) 
 // Structure: payroll[monthKey][cleanerName] = { salary, bonuses[], deductions[],
 //   attendance{dateISO: 'present'|'absent'|'half'}, workingHours, notes }
 // ============================================================================
-function PayrollView({ payroll, savePayroll, CLEANERS, colors }) {
+function PayrollView({ payroll, savePayroll, CLEANERS, PAYROLL_ROSTER, colors }) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth()); // 0-based
-  const [selectedCleaner, setSelectedCleaner] = useState(CLEANERS[0] || '');
+  // Use PAYROLL_ROSTER (which includes non-cleaners like Malek) — fallback to CLEANERS list
+  const rosterNames = (PAYROLL_ROSTER && PAYROLL_ROSTER.length > 0) ? PAYROLL_ROSTER.map(p => p.name) : (CLEANERS || []);
+  const [selectedCleaner, setSelectedCleaner] = useState(rosterNames[0] || '');
   const [tab, setTab] = useState('summary'); // summary | attendance | bonuses | deductions
 
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -4844,6 +4911,24 @@ function PayrollView({ payroll, savePayroll, CLEANERS, colors }) {
   for (let y = now.getFullYear() - 2; y <= now.getFullYear() + 1; y++) yearOptions.push(y);
   const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
   const monthName = `${months[month]} ${year}`;
+
+  // One-click: fill every employee's default salary for the selected month.
+  // Preserves existing bonuses and deductions — only overwrites base salary.
+  const generateAllSalaries = () => {
+    if (!PAYROLL_ROSTER || PAYROLL_ROSTER.length === 0) return;
+    const monthData = payroll[monthKey] || {};
+    const existingCount = Object.values(monthData).filter(r => (r.salary || 0) > 0).length;
+    const msg = existingCount > 0
+      ? `This will set default salaries for ${PAYROLL_ROSTER.length} employees for ${monthName}, overwriting existing base salary values (bonuses & deductions kept). Continue?`
+      : `Set default salaries for ${PAYROLL_ROSTER.length} employees for ${monthName}?`;
+    if (!confirm(msg)) return;
+    const nextMonthData = { ...monthData };
+    PAYROLL_ROSTER.forEach(person => {
+      const existing = nextMonthData[person.name] || { salary: 0, bonuses: [], deductions: [], attendance: {}, workingHours: 0, notes: '' };
+      nextMonthData[person.name] = { ...existing, salary: person.defaultSalary };
+    });
+    savePayroll({ ...payroll, [monthKey]: nextMonthData });
+  };
 
   // Ensure the record exists for this cleaner + month
   const record = payroll[monthKey]?.[selectedCleaner] || {
@@ -4939,9 +5024,19 @@ function PayrollView({ payroll, savePayroll, CLEANERS, colors }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Payroll</h2>
-          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Monthly salary, bonuses, deductions and attendance for each cleaner</p>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Monthly salary, bonuses, deductions and attendance for each employee</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {PAYROLL_ROSTER && PAYROLL_ROSTER.length > 0 && (
+            <button
+              onClick={generateAllSalaries}
+              className="btn btn-primary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', fontSize: '13px' }}
+              title="One click fills every employee's default salary for this month"
+            >
+              <RefreshCw size={13} /> Generate All Salaries
+            </button>
+          )}
           <select className="select" value={month} onChange={e => setMonth(parseInt(e.target.value))} style={{ width: 'auto' }}>
             {months.map((m, i) => <option key={i} value={i}>{m}</option>)}
           </select>
@@ -4951,22 +5046,31 @@ function PayrollView({ payroll, savePayroll, CLEANERS, colors }) {
         </div>
       </div>
 
-      {/* Cleaner picker */}
+      {/* Employee picker (uses payroll roster: includes non-cleaners like supervisors/drivers) */}
       <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '12px', padding: '14px', marginBottom: '16px' }}>
-        <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '8px' }}>Select cleaner</div>
+        <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '8px' }}>Select employee</div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-          {CLEANERS.map(c => (
-            <button
-              key={c}
-              onClick={() => setSelectedCleaner(c)}
-              style={{
-                padding: '8px 14px', borderRadius: '99px', fontSize: '13px', fontWeight: 600, cursor: 'pointer',
-                background: selectedCleaner === c ? colors.headerGreen : colors.soft,
-                color: selectedCleaner === c ? 'white' : colors.ink,
-                border: `1px solid ${selectedCleaner === c ? colors.headerGreen : colors.border}`,
-              }}
-            >{c}</button>
-          ))}
+          {rosterNames.map(c => {
+            const person = PAYROLL_ROSTER && PAYROLL_ROSTER.find(p => p.name === c);
+            const isNonCleaner = person && person.role && person.role !== 'Cleaner';
+            return (
+              <button
+                key={c}
+                onClick={() => setSelectedCleaner(c)}
+                style={{
+                  padding: '8px 14px', borderRadius: '99px', fontSize: '13px', fontWeight: 600, cursor: 'pointer',
+                  background: selectedCleaner === c ? colors.headerGreen : colors.soft,
+                  color: selectedCleaner === c ? 'white' : colors.ink,
+                  border: `1px solid ${selectedCleaner === c ? colors.headerGreen : colors.border}`,
+                  display: 'inline-flex', alignItems: 'center', gap: '5px',
+                }}
+                title={isNonCleaner ? `${person.role}` : ''}
+              >
+                {c}
+                {isNonCleaner && <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: selectedCleaner === c ? colors.gold : colors.accent, color: selectedCleaner === c ? colors.ink : 'white', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{person.role}</span>}
+              </button>
+            );
+          })}
         </div>
       </div>
 
