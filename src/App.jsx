@@ -1317,7 +1317,7 @@ export default function CleaningApp() {
         {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={CLEANERS} updateBooking={updateBooking} />}
         {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} currentDate={date} currentBookings={bookings} savedDays={savedDays} />}
-        {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} />}
+        {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} payroll={payroll} CLEANERS={CLEANERS} />}
         {view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} colors={colors} />}
         {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} cloudStatus={cloudStatus} lastSync={lastSync} bookings={bookings} savedDays={savedDays} clients={clients} contracts={contracts} cleanerHomes={cleanerHomes} officeAddress={officeAddress} expenses={expenses} setCloudStatus={setCloudStatus} setLastSync={setLastSync} />}
       </div>
@@ -4160,7 +4160,7 @@ function LocationPickerModal({ title, initialLat, initialLng, initialAddress, on
   );
 }
 
-function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWithCalc, allBookings }) {
+function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWithCalc, allBookings, payroll, CLEANERS }) {
   const [editing, setEditing] = useState(null);
   const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
@@ -4195,16 +4195,36 @@ function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWi
 
   const remove = (id) => { if (confirm('Delete this expense?')) saveExpenses(expenses.filter(e => e.id !== id)); };
 
-  // Filter
+  // Filter — use STRING prefix match to avoid timezone bug on 31-day months
+  const monthKeyFilter = `${filterYear}-${String(filterMonth + 1).padStart(2, '0')}`;
   const filtered = expenses.filter(e => {
-    const d = new Date(e.date);
-    if (d.getMonth() !== filterMonth) return false;
-    if (d.getFullYear() !== filterYear) return false;
+    if (!e.date || !e.date.startsWith(monthKeyFilter)) return false;
     if (filterCategory && e.category !== filterCategory) return false;
     return true;
   }).sort((a, b) => b.date.localeCompare(a.date));
 
   const monthTotal = filtered.reduce((s, e) => s + parseFloat(e.amount || 0), 0);
+
+  // ============ PAYROLL SUMMARY (pulls from Payroll tab data) ============
+  // For the selected month, build one row per cleaner with:
+  //   Base Salary | Bonuses (Incentive) | Deductions | Net Total
+  // Grand total then adds "Other Expenses" (the regular expenses table) at the bottom.
+  const payrollForMonth = (payroll && payroll[monthKeyFilter]) || {};
+  const cleanerList = CLEANERS || [];
+  const payrollRows = cleanerList.map(name => {
+    const rec = payrollForMonth[name] || { salary: 0, bonuses: [], deductions: [] };
+    const salary = Number(rec.salary || 0);
+    const bonuses = (rec.bonuses || []).reduce((s, b) => s + Number(b.amount || 0), 0);
+    const deductions = (rec.deductions || []).reduce((s, d) => s + Number(d.amount || 0), 0);
+    const net = salary + bonuses - deductions;
+    return { name, salary, bonuses, deductions, net };
+  });
+  const payrollTotalSalary = payrollRows.reduce((s, r) => s + r.salary, 0);
+  const payrollTotalBonuses = payrollRows.reduce((s, r) => s + r.bonuses, 0);
+  const payrollTotalDeductions = payrollRows.reduce((s, r) => s + r.deductions, 0);
+  const payrollTotalNet = payrollRows.reduce((s, r) => s + r.net, 0);
+  const grandTotal = payrollTotalNet + monthTotal;
+
 
   // Calculate revenue for the same period
   const monthStart = new Date(filterYear, filterMonth, 1);
@@ -4305,6 +4325,91 @@ function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWi
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {filtered.length > 0 && <button className="btn" onClick={exportExpensesExcel}><FileSpreadsheet size={14} /> Excel</button>}
           <button className="btn btn-primary" onClick={startNew}><Plus size={14} /> New Expense</button>
+        </div>
+      </div>
+
+      {/* ============ MONTHLY PAYROLL SUMMARY TABLE ============ */}
+      {/* Rolls up salary + bonuses (incentives) − deductions per cleaner for the selected month.
+          Data comes from the Payroll tab. If a cleaner has no record for the month, they show 0s.
+          The GRAND TOTAL at the bottom includes both payroll AND "Other Expenses" for the same month. */}
+      <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px', marginBottom: '20px', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+          <div>
+            <h3 className="display-font" style={{ margin: 0, fontSize: '17px', fontWeight: 700 }}>Monthly Payroll Summary · {months[filterMonth]} {filterYear}</h3>
+            <p style={{ margin: '4px 0 0', fontSize: '12px', color: colors.ink + '99' }}>Salary + Incentives − Deductions per employee. Numbers come from the Payroll tab.</p>
+          </div>
+          <div style={{ padding: '6px 12px', background: colors.accentLight, border: `1px solid ${colors.accent}`, borderRadius: '8px', fontSize: '11px', color: colors.accent, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <Users size={12} /> {cleanerList.length} employees
+          </div>
+        </div>
+
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+            <thead>
+              <tr style={{ background: colors.headerGreen, color: 'white' }}>
+                <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', width: '40px' }}>#</th>
+                <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Employee Name</th>
+                <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Base Salary</th>
+                <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Incentive</th>
+                <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Deduction</th>
+                <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Net Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payrollRows.length === 0 ? (
+                <tr>
+                  <td colSpan="6" style={{ padding: '30px 20px', textAlign: 'center', color: colors.ink + '66', fontSize: '13px', background: colors.soft }}>
+                    No cleaners set up yet. Add them in the Payroll tab or Settings.
+                  </td>
+                </tr>
+              ) : payrollRows.map((r, idx) => (
+                <tr key={r.name} style={{ background: idx % 2 === 0 ? colors.soft + '55' : 'white', borderBottom: `1px solid ${colors.border}` }}>
+                  <td style={{ padding: '10px 12px', color: colors.ink + '99', fontWeight: 600 }}>{idx + 1}</td>
+                  <td style={{ padding: '10px 12px', fontWeight: 700, fontFamily: 'Arial, sans-serif', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{r.name}</td>
+                  <td className="mono" style={{ padding: '10px 12px', textAlign: 'right' }}>{r.salary.toFixed(0)} AED</td>
+                  <td className="mono" style={{ padding: '10px 12px', textAlign: 'right', color: r.bonuses > 0 ? '#166534' : colors.ink + '77' }}>{r.bonuses.toFixed(0)} AED</td>
+                  <td className="mono" style={{ padding: '10px 12px', textAlign: 'right', color: r.deductions > 0 ? '#991B1B' : colors.ink + '77' }}>{r.deductions.toFixed(0)} AED</td>
+                  <td className="mono" style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, color: colors.accent, fontSize: '14px' }}>{r.net.toFixed(0)} AED</td>
+                </tr>
+              ))}
+              {payrollRows.length > 0 && (
+                <tr style={{ background: colors.headerGreen + '15', borderTop: `2px solid ${colors.accent}` }}>
+                  <td colSpan="2" style={{ padding: '12px', fontWeight: 700, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink }}>TOTAL</td>
+                  <td className="mono" style={{ padding: '12px', textAlign: 'right', fontWeight: 700 }}>{payrollTotalSalary.toFixed(0)} AED</td>
+                  <td className="mono" style={{ padding: '12px', textAlign: 'right', fontWeight: 700, color: '#166534' }}>{payrollTotalBonuses.toFixed(0)} AED</td>
+                  <td className="mono" style={{ padding: '12px', textAlign: 'right', fontWeight: 700, color: '#991B1B' }}>{payrollTotalDeductions.toFixed(0)} AED</td>
+                  <td className="mono" style={{ padding: '12px', textAlign: 'right', fontWeight: 800, color: colors.accent, fontSize: '15px' }}>{payrollTotalNet.toFixed(0)} AED</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Other Expenses subtotal row */}
+        <div style={{ marginTop: '12px', padding: '14px 16px', background: colors.soft, borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink }}>
+              + Other Expenses <span style={{ fontSize: '11px', color: colors.ink + '77', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>({filtered.length} {filtered.length === 1 ? 'entry' : 'entries'} in {months[filterMonth]})</span>
+            </div>
+            <div className="mono" style={{ fontWeight: 700, fontSize: '15px', color: colors.rust }}>{monthTotal.toFixed(0)} AED</div>
+          </div>
+          {filtered.length > 0 && (
+            <div style={{ fontSize: '11px', color: colors.ink + '77', paddingLeft: '2px' }}>
+              {filtered.slice(0, 5).map((e, i) => (
+                <span key={e.id}>{i > 0 && ' · '}<span style={{ fontWeight: 600 }}>{e.category}</span>: {parseFloat(e.amount).toFixed(0)}</span>
+              ))}
+              {filtered.length > 5 && <span> · +{filtered.length - 5} more</span>}
+            </div>
+          )}
+        </div>
+
+        {/* GRAND TOTAL */}
+        <div style={{ marginTop: '12px', padding: '16px 20px', background: colors.headerGreen, color: 'white', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+          <div>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.1em', color: colors.gold, fontWeight: 700 }}>GRAND TOTAL</div>
+            <div style={{ fontSize: '11px', color: 'white', opacity: 0.8, marginTop: '2px' }}>Salaries + Incentives − Deductions + Other Expenses</div>
+          </div>
+          <div className="display-font mono" style={{ fontSize: '28px', fontWeight: 800, color: 'white' }}>{grandTotal.toFixed(0)} <span style={{ fontSize: '15px' }}>AED</span></div>
         </div>
       </div>
 
