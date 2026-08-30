@@ -1964,7 +1964,7 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
 
   // Actually apply the payment when the user confirms in the modal.
   // Now handles multi-date bulk payments by grouping items by their booking date.
-  const confirmPayment = ({ paymentType, amountReceived, keepOriginalMethod }) => {
+  const confirmPayment = async ({ paymentType, amountReceived, keepOriginalMethod }) => {
     if (!payModal) return;
     const ids = new Set(payModal.items.map(i => i.id));
     const dates = payModal.dates || [];
@@ -2025,6 +2025,33 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
     }
 
     setPayModal(null);
+
+    // ===== PERSIST PAID STATUS TO SUPABASE =====
+    // Without this, "Mark Paid" only updates local state + localStorage, and the next
+    // page load overwrites it with the (still-PENDING) cloud copy — so payments revert.
+    // Mirror the "Save Day" upsert for every affected saved day, in one batched call.
+    const cloudRows = [];
+    dates.forEach(d => {
+      if (updatedDays[d]) {
+        cloudRows.push({ date: d, bookings: updatedDays[d].bookings, saved_at: new Date().toISOString() });
+      }
+    });
+    if (cloudRows.length > 0) {
+      try {
+        const { error } = await supabase.from('days').upsert(cloudRows);
+        if (error) throw error;
+      } catch (e) {
+        console.error('Payment cloud-sync error:', e);
+        // Surface the failure instead of hiding it — a silent failure here is exactly
+        // what made payments silently revert before.
+        alert(
+          '⚠ Payment was saved on THIS device but did NOT sync to the cloud.\n\n' +
+          'It may reappear as unpaid after a refresh or on another device.\n\n' +
+          'Error: ' + (e?.message || 'unknown') + '\n\n' +
+          'Check your internet connection and try marking it paid again.'
+        );
+      }
+    }
   };
 
   const today = new Date().setHours(0, 0, 0, 0);
