@@ -1902,9 +1902,10 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
     setPayModal({
       items: [booking],
       clientName: booking.clientName || 'Unknown',
-      date: booking.date,
+      dates: [booking.date],
       defaultType: booking.paymentType || 'CASH',
       owedAmount: booking.total,
+      scope: 'single',
     });
   };
 
@@ -1913,38 +1914,96 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
     setPayModal({
       items: dayData.items,
       clientName,
-      date: dayData.date,
+      dates: [dayData.date],
       defaultType: dayData.items[0]?.paymentType || 'CASH',
       owedAmount: dayData.total,
+      scope: 'day',
     });
   };
 
-  // Actually apply the payment when the user confirms in the modal
-  const confirmPayment = ({ paymentType, amountReceived }) => {
+  // BULK: Open the payment modal with ALL of a client's unpaid jobs across every day.
+  // This is the big time-saver for clients who pay the full outstanding amount at once.
+  const openPayModalForClient = (clientGroup) => {
+    const allItems = clientGroup.daysList.flatMap(d => d.items);
+    const uniqueDates = [...new Set(allItems.map(i => i.date))].sort();
+    // Prefer the most common payment method
+    const typeCounts = {};
+    allItems.forEach(i => { typeCounts[i.paymentType || 'CASH'] = (typeCounts[i.paymentType || 'CASH'] || 0) + 1; });
+    const defaultType = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'CASH';
+    setPayModal({
+      items: allItems,
+      clientName: clientGroup.name,
+      dates: uniqueDates,
+      defaultType,
+      owedAmount: clientGroup.total,
+      scope: 'client',
+    });
+  };
+
+  // BULK: Open the payment modal with ALL currently filtered pending jobs across all clients.
+  // Use this to clear massive backlogs — e.g. after month-end reconciliation.
+  const openPayModalForAllVisible = () => {
+    if (pending.length === 0) return;
+    const uniqueDates = [...new Set(pending.map(i => i.date))].sort();
+    const typeCounts = {};
+    pending.forEach(i => { typeCounts[i.paymentType || 'CASH'] = (typeCounts[i.paymentType || 'CASH'] || 0) + 1; });
+    const defaultType = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'CASH';
+    // For bulk-all, we use "MIXED" clientName because it spans clients.
+    // Credit balances aren't tracked for MIXED because we can't attribute overpayment to one client.
+    const clientNames = [...new Set(pending.map(i => i.clientName || 'Unknown'))];
+    setPayModal({
+      items: pending,
+      clientName: clientNames.length === 1 ? clientNames[0] : `${clientNames.length} clients`,
+      dates: uniqueDates,
+      defaultType,
+      owedAmount: pending.reduce((s, i) => s + i.total, 0),
+      scope: 'all',
+      multiClient: clientNames.length > 1,
+    });
+  };
+
+  // Actually apply the payment when the user confirms in the modal.
+  // Now handles multi-date bulk payments by grouping items by their booking date.
+  const confirmPayment = ({ paymentType, amountReceived, keepOriginalMethod }) => {
     if (!payModal) return;
     const ids = new Set(payModal.items.map(i => i.id));
-    const bookingDate = payModal.date;
+    const dates = payModal.dates || [];
     const owed = payModal.owedAmount;
     const received = Number(amountReceived) || owed;
     const overpayment = received - owed;
 
-    // Mark bookings paid + record actual paymentType used
-    const applyUpdate = (list) => list.map(b => ids.has(b.id) ? { ...b, paymentStatus: 'PAID', paymentType } : b);
+    // Build the updater. If "keep original method" is on (bulk case), don't overwrite paymentType.
+    const applyUpdate = (list) => list.map(b => {
+      if (!ids.has(b.id)) return b;
+      const patch = { paymentStatus: 'PAID' };
+      if (!keepOriginalMethod) patch.paymentType = paymentType;
+      return { ...b, ...patch };
+    });
 
-    if (bookingDate === date) {
+    // Update current day's bookings if the current view's date is in the affected set
+    if (dates.includes(date)) {
       setBookings(applyUpdate(bookings));
     }
-    if (savedDays[bookingDate]) {
-      const updatedDays = { ...savedDays, [bookingDate]: { ...savedDays[bookingDate], bookings: applyUpdate(savedDays[bookingDate].bookings) } };
+    // Update every affected saved day in one pass
+    let updatedDays = { ...savedDays };
+    let hasChanges = false;
+    dates.forEach(d => {
+      if (updatedDays[d]) {
+        updatedDays[d] = { ...updatedDays[d], bookings: applyUpdate(updatedDays[d].bookings) };
+        hasChanges = true;
+      }
+    });
+    if (hasChanges) {
       setSavedDays(updatedDays);
       try { localStorage.setItem('sparkle_all_days', JSON.stringify(updatedDays)); } catch (e) {}
     }
 
-    // Handle credit / debit for the client if amounts don't match
-    if (overpayment !== 0) {
+    // Track over/underpayment as credit — only for single-client scopes (skip multi-client bulk)
+    if (overpayment !== 0 && !payModal.multiClient) {
       const cn = payModal.clientName;
       const existing = clientCredits[cn] || { balance: 0, history: [] };
       const nextBalance = (existing.balance || 0) + overpayment;
+      const dateLabel = dates.length === 1 ? dates[0] : `${dates.length} days`;
       const nextCredits = {
         ...clientCredits,
         [cn]: {
@@ -1956,8 +2015,8 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
               amount: overpayment,
               type: overpayment > 0 ? 'credit' : 'debit',
               note: overpayment > 0
-                ? `Overpaid ${overpayment.toFixed(2)} AED on ${bookingDate} payment (received ${received}, owed ${owed})`
-                : `Underpaid ${Math.abs(overpayment).toFixed(2)} AED on ${bookingDate} payment (received ${received}, owed ${owed})`
+                ? `Overpaid ${overpayment.toFixed(2)} AED on ${dateLabel} payment (received ${received}, owed ${owed})`
+                : `Underpaid ${Math.abs(overpayment).toFixed(2)} AED on ${dateLabel} payment (received ${received}, owed ${owed})`
             },
           ],
         },
@@ -1985,6 +2044,16 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
           </p>
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {pending.length > 0 && (
+            <button
+              onClick={openPayModalForAllVisible}
+              className="btn btn-primary"
+              style={{ background: colors.rust, borderColor: colors.rust }}
+              title={`Mark all ${pending.length} ${isFiltered ? 'filtered' : ''} pending jobs as paid in one action`}
+            >
+              <Check size={14} /> Mark All {pending.length} Paid
+            </button>
+          )}
           {pending.length > 0 && <button className="btn btn-primary" onClick={exportPendingExcel}><FileSpreadsheet size={14} /> Excel</button>}
           <div style={{ padding: '12px 20px', background: pending.length ? '#FEF3C7' : colors.accentLight, border: `1.5px solid ${pending.length ? colors.warning : colors.accent}`, borderRadius: '10px', textAlign: 'right' }}>
             <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>{isFiltered ? 'Filtered' : 'Outstanding'}</div>
@@ -1993,6 +2062,56 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
           </div>
         </div>
       </div>
+
+      {/* ============ MONTH QUICK-JUMP BAR ============ */}
+      {/* Clicking a month sets the date range filter to that whole month.
+          Uses last-day calculation so Feb/Apr/etc. work correctly. */}
+      {(() => {
+        const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const currentYearNum = new Date().getFullYear();
+        // Try to detect the active month from the current dateFrom
+        const activeYear = dateFrom ? parseInt(dateFrom.slice(0, 4)) : currentYearNum;
+        const activeMonth = dateFrom ? parseInt(dateFrom.slice(5, 7)) - 1 : -1;
+        const yearsToShow = [];
+        for (let y = currentYearNum - 2; y <= currentYearNum + 1; y++) yearsToShow.push(y);
+        const jumpToMonth = (y, m) => {
+          const lastDay = new Date(y, m + 1, 0).getDate();
+          setDateFrom(`${y}-${String(m + 1).padStart(2, '0')}-01`);
+          setDateTo(`${y}-${String(m + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`);
+        };
+        return (
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', background: 'white', padding: '10px 12px', borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: colors.ink + '99', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>⚡ Jump to month:</span>
+            <select
+              value={activeYear}
+              onChange={e => {
+                const newYear = parseInt(e.target.value);
+                if (activeMonth >= 0) jumpToMonth(newYear, activeMonth);
+              }}
+              style={{ padding: '5px 8px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '12px', background: colors.soft + '55', fontWeight: 600, cursor: 'pointer' }}
+            >
+              {yearsToShow.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
+              {monthsShort.map((m, idx) => {
+                const isActive = activeMonth === idx;
+                return (
+                  <button
+                    key={m}
+                    onClick={() => jumpToMonth(activeYear, idx)}
+                    style={{
+                      padding: '5px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                      border: `1px solid ${isActive ? colors.headerGreen : colors.border}`,
+                      background: isActive ? colors.headerGreen : 'white',
+                      color: isActive ? 'white' : colors.ink,
+                    }}
+                  >{m}</button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Search & date filter bar */}
       <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', background: 'white', padding: '10px 12px', borderRadius: '10px', border: `1px solid ${colors.border}` }}>
@@ -2077,9 +2196,19 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
                   </div>
                   {g.phone && <div style={{ fontSize: '12px', color: colors.ink + 'AA', marginTop: '2px' }}><Phone size={11} style={{ display: 'inline', verticalAlign: 'middle' }} /> <span className="mono">{g.phone}</span></div>}
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '11px', color: colors.ink + '99', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{g.daysList.length} {g.daysList.length === 1 ? 'day' : 'days'} · {g.jobCount} {g.jobCount === 1 ? 'job' : 'jobs'}</div>
-                  <div className="display-font" style={{ fontSize: '20px', fontWeight: 700, color: colors.warning }}>{g.total.toFixed(0)} AED owed</div>
+                <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '11px', color: colors.ink + '99', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{g.daysList.length} {g.daysList.length === 1 ? 'day' : 'days'} · {g.jobCount} {g.jobCount === 1 ? 'job' : 'jobs'}</div>
+                    <div className="display-font" style={{ fontSize: '20px', fontWeight: 700, color: colors.warning }}>{g.total.toFixed(0)} AED owed</div>
+                  </div>
+                  <button
+                    onClick={() => openPayModalForClient(g)}
+                    className="btn btn-primary"
+                    style={{ fontSize: '12px', padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                    title={`Mark all ${g.jobCount} pending jobs for ${g.name} (across ${g.daysList.length} ${g.daysList.length === 1 ? 'day' : 'days'}) as paid in one action`}
+                  >
+                    <Check size={12} /> Mark ALL {g.jobCount} Paid
+                  </button>
                 </div>
               </div>
               <div style={{ overflowX: 'auto' }}>
@@ -2186,12 +2315,18 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
 
 // Popup that appears when clicking Mark Paid. Lets user pick CASH/ONLINE and enter actual amount received.
 function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
+  const isBulk = modal.scope === 'client' || modal.scope === 'all';
+  // For bulk with mixed payment types, default to "Keep original methods"
+  const paymentTypesInSet = [...new Set((modal.items || []).map(i => i.paymentType || 'CASH'))];
+  const hasMixedTypes = paymentTypesInSet.length > 1;
   const [paymentType, setPaymentType] = useState(modal.defaultType || 'CASH');
+  const [keepOriginalMethod, setKeepOriginalMethod] = useState(isBulk && hasMixedTypes);
   const [amountReceived, setAmountReceived] = useState(String(modal.owedAmount));
   const owed = modal.owedAmount;
   const received = Number(amountReceived) || 0;
   const diff = received - owed;
-  const effectiveOwed = Math.max(0, owed - Math.max(0, currentCredit));
+  const dates = modal.dates || [];
+  const dateLabel = dates.length === 1 ? dates[0] : `${dates.length} days (${dates[0]} → ${dates[dates.length - 1]})`;
 
   return (
     <div
@@ -2200,53 +2335,90 @@ function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
     >
       <div
         onClick={e => e.stopPropagation()}
-        style={{ background: 'white', borderRadius: '14px', padding: '24px', maxWidth: '440px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}
+        style={{ background: 'white', borderRadius: '14px', padding: '24px', maxWidth: '480px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', maxHeight: '90vh', overflowY: 'auto' }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '18px' }}>
           <div>
-            <h3 className="display-font" style={{ margin: 0, fontSize: '20px', fontWeight: 700 }}>Record Payment</h3>
-            <p style={{ margin: '4px 0 0', fontSize: '13px', color: colors.ink + '99' }}>{modal.clientName} · {modal.date}</p>
+            <h3 className="display-font" style={{ margin: 0, fontSize: '20px', fontWeight: 700 }}>
+              {isBulk ? '💼 Bulk Payment' : 'Record Payment'}
+            </h3>
+            <p style={{ margin: '4px 0 0', fontSize: '13px', color: colors.ink + '99' }}>
+              {modal.clientName} · {dateLabel}
+            </p>
           </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px', color: colors.ink + '99' }}>
             <X size={18} />
           </button>
         </div>
 
-        {currentCredit > 0 && (
+        {/* Bulk info banner */}
+        {isBulk && (
+          <div style={{ padding: '12px 14px', background: colors.gold + '33', border: `1px solid ${colors.gold}`, borderRadius: '8px', marginBottom: '14px', fontSize: '12px', color: colors.ink }}>
+            <strong>⚡ Bulk action:</strong> You&apos;re about to mark <strong>{modal.items.length} jobs</strong> across <strong>{dates.length} {dates.length === 1 ? 'day' : 'days'}</strong>
+            {modal.scope === 'client' ? ` for ${modal.clientName}` : ''}
+            {modal.multiClient ? ` spanning ${modal.clientName}` : ''} as PAID in one action.
+            {hasMixedTypes && (
+              <div style={{ marginTop: '6px', fontSize: '11px', color: colors.ink + '99' }}>
+                Payment types in this batch: {paymentTypesInSet.join(', ')} — recommend keeping originals.
+              </div>
+            )}
+          </div>
+        )}
+
+        {currentCredit > 0 && !modal.multiClient && (
           <div style={{ padding: '10px 12px', background: '#DBEAFE', borderRadius: '8px', marginBottom: '14px', fontSize: '12px', color: '#1E40AF' }}>
             💡 This client has <strong>{currentCredit.toFixed(2)} AED credit</strong> from previous overpayments. You can subtract it from the amount received below.
           </div>
         )}
-        {currentCredit < 0 && (
+        {currentCredit < 0 && !modal.multiClient && (
           <div style={{ padding: '10px 12px', background: '#FEE2E2', borderRadius: '8px', marginBottom: '14px', fontSize: '12px', color: '#991B1B' }}>
-            ⚠️ This client owes <strong>{Math.abs(currentCredit).toFixed(2)} AED extra</strong> from previous underpayments. Consider adding it to what they owe you today.
+            ⚠️ This client owes <strong>{Math.abs(currentCredit).toFixed(2)} AED extra</strong> from previous underpayments.
           </div>
         )}
 
         <div style={{ marginBottom: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '4px' }}>
-            <span style={{ color: colors.ink + '99' }}>Amount owed today</span>
-            <span className="mono" style={{ fontWeight: 700, color: colors.warning }}>{owed.toFixed(2)} AED</span>
+            <span style={{ color: colors.ink + '99' }}>Amount owed</span>
+            <span className="mono" style={{ fontWeight: 700, color: colors.warning, fontSize: '16px' }}>{owed.toFixed(2)} AED</span>
           </div>
           <div style={{ fontSize: '11px', color: colors.ink + '77' }}>{modal.items.length} {modal.items.length === 1 ? 'job' : 'jobs'} being marked paid</div>
         </div>
 
         <label style={{ display: 'block', marginBottom: '14px' }}>
-          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Payment method</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-            <button
-              onClick={() => setPaymentType('CASH')}
-              style={{ padding: '12px', borderRadius: '10px', border: paymentType === 'CASH' ? `2px solid ${colors.rust}` : `2px solid ${colors.border}`, background: paymentType === 'CASH' ? '#FEE2E2' : 'white', color: paymentType === 'CASH' ? colors.rust : colors.ink, fontWeight: 700, fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-            >
-              💵 CASH
-            </button>
-            <button
-              onClick={() => setPaymentType('ONLINE')}
-              style={{ padding: '12px', borderRadius: '10px', border: paymentType === 'ONLINE' ? `2px solid ${colors.accent}` : `2px solid ${colors.border}`, background: paymentType === 'ONLINE' ? colors.accentLight : 'white', color: paymentType === 'ONLINE' ? colors.accent : colors.ink, fontWeight: 700, fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-            >
-              💳 ONLINE
-            </button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>Payment method</div>
+            {isBulk && (
+              <label style={{ fontSize: '11px', color: colors.ink + '99', display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={keepOriginalMethod}
+                  onChange={e => setKeepOriginalMethod(e.target.checked)}
+                  style={{ margin: 0, cursor: 'pointer' }}
+                />
+                Keep original methods
+              </label>
+            )}
           </div>
+          {keepOriginalMethod ? (
+            <div style={{ padding: '12px', border: `2px dashed ${colors.border}`, borderRadius: '10px', fontSize: '13px', color: colors.ink + '99', textAlign: 'center', background: colors.soft + '55' }}>
+              Each job keeps its original payment method ({paymentTypesInSet.join(', ')})
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <button
+                onClick={() => setPaymentType('CASH')}
+                style={{ padding: '12px', borderRadius: '10px', border: paymentType === 'CASH' ? `2px solid ${colors.rust}` : `2px solid ${colors.border}`, background: paymentType === 'CASH' ? '#FEE2E2' : 'white', color: paymentType === 'CASH' ? colors.rust : colors.ink, fontWeight: 700, fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+              >
+                💵 CASH
+              </button>
+              <button
+                onClick={() => setPaymentType('ONLINE')}
+                style={{ padding: '12px', borderRadius: '10px', border: paymentType === 'ONLINE' ? `2px solid ${colors.accent}` : `2px solid ${colors.border}`, background: paymentType === 'ONLINE' ? colors.accentLight : 'white', color: paymentType === 'ONLINE' ? colors.accent : colors.ink, fontWeight: 700, fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+              >
+                💳 ONLINE
+              </button>
+            </div>
+          )}
         </label>
 
         <label style={{ display: 'block', marginBottom: '16px' }}>
@@ -2260,11 +2432,13 @@ function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
             autoFocus
           />
           <div style={{ fontSize: '11px', color: colors.ink + '77', marginTop: '6px' }}>
-            Change this if the client paid more or less than owed. The difference will be saved as credit/debt on their account.
+            {modal.multiClient
+              ? 'For multi-client bulk payments, over/underpayments are not tracked per client.'
+              : 'Change if the client paid more or less than owed. Difference saved as credit/debt.'}
           </div>
         </label>
 
-        {diff !== 0 && received > 0 && (
+        {diff !== 0 && received > 0 && !modal.multiClient && (
           <div style={{ padding: '10px 12px', background: diff > 0 ? '#DCFCE7' : '#FEF3C7', borderRadius: '8px', marginBottom: '14px', fontSize: '13px', color: diff > 0 ? '#166534' : '#92400E' }}>
             {diff > 0 ? (
               <>✅ Overpayment of <strong>{diff.toFixed(2)} AED</strong> will be added as credit balance.</>
@@ -2277,12 +2451,12 @@ function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
           <button onClick={onClose} style={{ padding: '10px 18px', border: `1px solid ${colors.border}`, background: 'white', borderRadius: '8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
           <button
-            onClick={() => onConfirm({ paymentType, amountReceived: Number(amountReceived) })}
+            onClick={() => onConfirm({ paymentType, amountReceived: Number(amountReceived), keepOriginalMethod })}
             className="btn btn-primary"
             style={{ padding: '10px 22px', fontSize: '13px' }}
             disabled={received <= 0}
           >
-            <Check size={14} /> Confirm Payment
+            <Check size={14} /> {isBulk ? `Confirm ${modal.items.length} Payments` : 'Confirm Payment'}
           </button>
         </div>
       </div>
@@ -2977,15 +3151,12 @@ function MonthlyView({ allBookings, CLEANERS, colors, exportMonthlyExcel }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Monthly Report</h2>
           <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Complete monthly business record · ready to save to OneDrive/Drive</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <select className="select" value={month} onChange={e => setMonth(parseInt(e.target.value))} style={{ width: 'auto' }}>
-            {months.map((m, i) => <option key={i} value={i}>{m}</option>)}
-          </select>
           <select className="select" value={year} onChange={e => setYear(parseInt(e.target.value))} style={{ width: 'auto' }}>
             {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
@@ -2994,6 +3165,28 @@ function MonthlyView({ allBookings, CLEANERS, colors, exportMonthlyExcel }) {
               <FileSpreadsheet size={14} /> Download {months[month]} Excel
             </button>
           )}
+        </div>
+      </div>
+
+      {/* ============ MONTH QUICK-JUMP BAR ============ */}
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', background: 'white', padding: '10px 12px', borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+        <span style={{ fontSize: '11px', fontWeight: 700, color: colors.ink + '99', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>⚡ Jump to:</span>
+        <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
+          {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((m, idx) => {
+            const isActive = month === idx;
+            return (
+              <button
+                key={m}
+                onClick={() => setMonth(idx)}
+                style={{
+                  padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                  border: `1px solid ${isActive ? colors.headerGreen : colors.border}`,
+                  background: isActive ? colors.headerGreen : 'white',
+                  color: isActive ? 'white' : colors.ink,
+                }}
+              >{m}</button>
+            );
+          })}
         </div>
       </div>
 
@@ -3334,13 +3527,31 @@ function InvoicesView({ allBookings, clients, companyInfo, saveCompanyInfo, colo
         {selectedClient && mode === 'monthly' && (
           <>
             <h3 className="display-font" style={{ margin: '0 0 14px', fontSize: '17px', fontWeight: 700 }}>3. Pick the month</h3>
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
-              <select className="select" value={month} onChange={e => setMonth(parseInt(e.target.value))} style={{ width: 'auto' }}>
-                {months.map((m, i) => <option key={i} value={i}>{m}</option>)}
-              </select>
+            {/* Quick-jump month buttons */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
               <select className="select" value={year} onChange={e => setYear(parseInt(e.target.value))} style={{ width: 'auto' }}>
                 {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
+              <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
+                {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((m, idx) => {
+                  const isActive = month === idx;
+                  return (
+                    <button
+                      key={m}
+                      onClick={() => setMonth(idx)}
+                      style={{
+                        padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                        border: `1px solid ${isActive ? colors.headerGreen : colors.border}`,
+                        background: isActive ? colors.headerGreen : 'white',
+                        color: isActive ? 'white' : colors.ink,
+                      }}
+                    >{m}</button>
+                  );
+                })}
+              </div>
+            </div>
+            <div style={{ fontSize: '11px', color: colors.ink + '99', marginBottom: '20px' }}>
+              Selected: <strong>{months[month]} {year}</strong>
             </div>
           </>
         )}
@@ -4481,12 +4692,26 @@ function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWi
       {/* Filters */}
       <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '14px 18px', marginBottom: '16px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: '12px', fontWeight: 600, color: colors.ink + 'AA', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Filter:</span>
-        <select className="select" value={filterMonth} onChange={e => setFilterMonth(parseInt(e.target.value))} style={{ width: 'auto' }}>
-          {months.map((m, i) => <option key={i} value={i}>{m}</option>)}
-        </select>
         <select className="select" value={filterYear} onChange={e => setFilterYear(parseInt(e.target.value))} style={{ width: 'auto' }}>
           {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
         </select>
+        <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
+          {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((m, idx) => {
+            const isActive = filterMonth === idx;
+            return (
+              <button
+                key={m}
+                onClick={() => setFilterMonth(idx)}
+                style={{
+                  padding: '5px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                  border: `1px solid ${isActive ? colors.headerGreen : colors.border}`,
+                  background: isActive ? colors.headerGreen : 'white',
+                  color: isActive ? 'white' : colors.ink,
+                }}
+              >{m}</button>
+            );
+          })}
+        </div>
         <select className="select" value={filterCategory} onChange={e => setFilterCategory(e.target.value)} style={{ width: 'auto' }}>
           <option value="">All categories</option>
           {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
@@ -5021,7 +5246,7 @@ function PayrollView({ payroll, savePayroll, CLEANERS, PAYROLL_ROSTER, colors })
   return (
     <div>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Payroll</h2>
           <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Monthly salary, bonuses, deductions and attendance for each employee</p>
@@ -5037,12 +5262,31 @@ function PayrollView({ payroll, savePayroll, CLEANERS, PAYROLL_ROSTER, colors })
               <RefreshCw size={13} /> Generate All Salaries
             </button>
           )}
-          <select className="select" value={month} onChange={e => setMonth(parseInt(e.target.value))} style={{ width: 'auto' }}>
-            {months.map((m, i) => <option key={i} value={i}>{m}</option>)}
-          </select>
           <select className="select" value={year} onChange={e => setYear(parseInt(e.target.value))} style={{ width: 'auto' }}>
             {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
+        </div>
+      </div>
+
+      {/* Month quick-jump bar */}
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', background: 'white', padding: '10px 12px', borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+        <span style={{ fontSize: '11px', fontWeight: 700, color: colors.ink + '99', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>⚡ Jump to:</span>
+        <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
+          {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((m, idx) => {
+            const isActive = month === idx;
+            return (
+              <button
+                key={m}
+                onClick={() => setMonth(idx)}
+                style={{
+                  padding: '5px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                  border: `1px solid ${isActive ? colors.headerGreen : colors.border}`,
+                  background: isActive ? colors.headerGreen : 'white',
+                  color: isActive ? 'white' : colors.ink,
+                }}
+              >{m}</button>
+            );
+          })}
         </div>
       </div>
 
