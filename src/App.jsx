@@ -38,7 +38,7 @@ const CLEANER_COLORS = {
   'Razelle': '#0F4C3A'   // Dark green
 };
 const PAYMENT_TYPES = ['ONLINE', 'CASH'];
-const PAYMENT_STATUS = ['PAID', 'PENDING'];
+const PAYMENT_STATUS = ['PAID', 'PENDING', 'CANCELLED'];
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const parseHours = (timing) => {
@@ -93,6 +93,9 @@ export default function CleaningApp() {
   const [payroll, setPayroll] = useState({});
   // clientCredits: { [clientName]: { balance: number, history: [{date, amount, note, type: 'credit'|'debit'}] } }
   const [clientCredits, setClientCredits] = useState({});
+  // cleanerProfiles: { [cleanerName]: { phone, status, workingDays:[bool,bool,...], hoursStart, hoursEnd, skills, areas, ratePerHour, salaryPerMonth } }
+  // Only stored fields; the cleaner NAME comes from the CLEANERS array + PAYROLL_ROSTER
+  const [cleanerProfiles, setCleanerProfiles] = useState({});
   const [cloudStatus, setCloudStatus] = useState('connecting'); // 'connecting', 'synced', 'syncing', 'offline'
   const [lastSync, setLastSync] = useState(null);
   const [companyInfo, setCompanyInfo] = useState({
@@ -141,6 +144,8 @@ export default function CleaningApp() {
         if (payrollRaw) setPayroll(JSON.parse(payrollRaw));
         const creditsRaw = localStorage.getItem('sparkle_client_credits');
         if (creditsRaw) setClientCredits(JSON.parse(creditsRaw));
+        const profilesRaw = localStorage.getItem('sparkle_cleaner_profiles');
+        if (profilesRaw) setCleanerProfiles(JSON.parse(profilesRaw));
       } catch (e) { console.error('Local load error:', e); }
 
       // Then try to fetch from cloud and overwrite local data with cloud data
@@ -437,6 +442,12 @@ export default function CleaningApp() {
     try { localStorage.setItem('sparkle_client_credits', JSON.stringify(next)); } catch (e) {}
   };
 
+  // Cleaner profiles (contact info, working hours/days, skills) — localStorage only
+  const saveCleanerProfiles = (next) => {
+    setCleanerProfiles(next);
+    try { localStorage.setItem('sparkle_cleaner_profiles', JSON.stringify(next)); } catch (e) {}
+  };
+
   const generateFromContracts = () => {
     const dayOfWeek = new Date(date).getDay();
     const matching = contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek));
@@ -619,6 +630,12 @@ export default function CleaningApp() {
     alignment: { horizontal: 'center', vertical: 'center' },
     border: borderAll(RGB.ink, 'thin')
   };
+  const STYLE_CANCELLED = {
+    font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: '6B7280' } },
+    fill: { patternType: 'solid', fgColor: { rgb: 'E5E7EB' } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: borderAll(RGB.ink, 'thin')
+  };
 
   // Builder helper — produces a worksheet that visually matches the app's design
   const buildStyledSheet = (title, subtitle, headers, rows, colWidths, opts = {}) => {
@@ -652,7 +669,7 @@ export default function CleaningApp() {
         if (isTotalRow) {
           style = STYLE_TOTAL;
         } else if (statusCol !== undefined && c === statusCol) {
-          style = cell === 'PAID' ? STYLE_PAID : STYLE_PENDING;
+          style = cell === 'PAID' ? STYLE_PAID : cell === 'CANCELLED' ? STYLE_CANCELLED : STYLE_PENDING;
         } else if (priceCol !== undefined && c === priceCol) {
           // Red bold price cell — background depends on materials/alt
           if (hasMaterials) style = STYLE_PRICE_MAT;
@@ -784,7 +801,7 @@ export default function CleaningApp() {
   };
 
   const exportPendingExcel = () => {
-    const pending = allBookingsWithDate.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
+    const pending = allBookingsWithDate.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED' && b.total > 0);
     const today = new Date().setHours(0, 0, 0, 0);
     const headers = ['DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'HRS', 'AMOUNT (AED)', 'PAY', 'DAYS OVERDUE'];
     const rows = pending.map(b => {
@@ -834,7 +851,7 @@ export default function CleaningApp() {
     const cashTot = monthBookings.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0);
     const onlineTot = monthBookings.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0);
     const paidTot = monthBookings.filter(b => b.paymentStatus === 'PAID').reduce((s, b) => s + (b.total || 0), 0);
-    const pendingTot = monthBookings.filter(b => b.paymentStatus !== 'PAID').reduce((s, b) => s + (b.total || 0), 0);
+    const pendingTot = monthBookings.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED').reduce((s, b) => s + (b.total || 0), 0);
     const uniqueClients = new Set(monthBookings.map(b => b.clientName)).size;
     const activeDays = new Set(monthBookings.map(b => b.date)).size;
     const overviewRows = [
@@ -905,7 +922,7 @@ export default function CleaningApp() {
         Number(jobs.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
         Number(jobs.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
         Number(jobs.filter(b => b.paymentStatus === 'PAID').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
-        Number(jobs.filter(b => b.paymentStatus !== 'PAID').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
+        Number(jobs.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED').reduce((s, b) => s + (b.total || 0), 0).toFixed(2)),
         Number(jobs.reduce((s, b) => s + (b.total || 0), 0).toFixed(2))
       ];
     }).filter(r => r[1] > 0); // Only show cleaners who worked
@@ -946,7 +963,7 @@ export default function CleaningApp() {
     XLSX.utils.book_append_sheet(wb, wsClients, 'By Client');
 
     // === SHEET 6: Pending Payments (this month) ===
-    const monthPending = monthBookings.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
+    const monthPending = monthBookings.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED' && b.total > 0);
     if (monthPending.length > 0) {
       const todaySafe = new Date().setHours(0, 0, 0, 0);
       const pendHeaders = ['DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'AMOUNT (AED)', 'PAY', 'DAYS OVERDUE'];
@@ -1003,11 +1020,11 @@ export default function CleaningApp() {
     const totalJobs = filteredBookings.length;
     const totalHrs = filteredBookings.reduce((s, b) => s + (b.hours || 0), 0);
     const paidJobs = filteredBookings.filter(b => b.paymentStatus === 'PAID').length;
-    const pendingJobs = filteredBookings.filter(b => b.paymentStatus !== 'PAID').length;
+    const pendingJobs = filteredBookings.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED').length;
     const cashTotal = filteredBookings.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0);
     const onlineTotal = filteredBookings.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0);
     const paidAmt = filteredBookings.filter(b => b.paymentStatus === 'PAID').reduce((s, b) => s + (b.total || 0), 0);
-    const pendingAmt = filteredBookings.filter(b => b.paymentStatus !== 'PAID').reduce((s, b) => s + (b.total || 0), 0);
+    const pendingAmt = filteredBookings.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED').reduce((s, b) => s + (b.total || 0), 0);
 
     // Top cleaners
     const cleanerStats = {};
@@ -1213,7 +1230,7 @@ export default function CleaningApp() {
     }
 
     // ===== SHEET 7: PENDING PAYMENTS =====
-    const pendingFiltered = filteredBookings.filter(b => b.paymentStatus !== 'PAID');
+    const pendingFiltered = filteredBookings.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED');
     if (pendingFiltered.length > 0) {
       const today = new Date();
       const headers = ['DATE', 'CLIENT', 'PHONE', 'CLEANER', 'AMOUNT (AED)', 'DAYS OVERDUE'];
@@ -1309,6 +1326,7 @@ export default function CleaningApp() {
           <button className={`tab ${view === 'deployment' ? 'active' : ''}`} onClick={() => setView('deployment')}><Grid3x3 size={15} /> Deployment</button>
           <button className={`tab ${view === 'report' ? 'active' : ''}`} onClick={() => setView('report')}><FileText size={15} /> Daily Report</button>
           <button className={`tab ${view === 'clients' ? 'active' : ''}`} onClick={() => setView('clients')}><BookUser size={15} /> Clients ({clients.length})</button>
+          <button className={`tab ${view === 'cleaners' ? 'active' : ''}`} onClick={() => setView('cleaners')}><Users size={15} /> Cleaners</button>
           <button className={`tab ${view === 'contracts' ? 'active' : ''}`} onClick={() => setView('contracts')}><Repeat size={15} /> Contracts ({contracts.filter(c=>c.active).length})</button>
           <button className={`tab ${view === 'earnings' ? 'active' : ''}`} onClick={() => setView('earnings')}><TrendingUp size={15} /> Earnings</button>
           <button className={`tab ${view === 'pending' ? 'active' : ''}`} onClick={() => setView('pending')}><AlertCircle size={15} /> Pending</button>
@@ -1322,10 +1340,11 @@ export default function CleaningApp() {
       </div>
 
       <div style={{ padding: '32px', maxWidth: '1400px', margin: '0 auto' }}>
-        {view === 'input' && <InputView bookings={bookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} clients={clients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} />}
+        {view === 'input' && <InputView bookings={bookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={CLEANERS} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
         {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
+        {view === 'cleaners' && <CleanersView cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} />}
         {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} exportContractsExcel={exportContractsExcel} />}
         {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
@@ -1333,7 +1352,7 @@ export default function CleaningApp() {
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={CLEANERS} updateBooking={updateBooking} />}
         {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} currentDate={date} currentBookings={bookings} savedDays={savedDays} />}
         {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} payroll={payroll} savePayroll={savePayroll} PAYROLL_ROSTER={PAYROLL_ROSTER} />}
-        {view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} />}
+        {view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} allBookings={allBookingsWithDate} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} />}
         {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} cloudStatus={cloudStatus} lastSync={lastSync} bookings={bookings} savedDays={savedDays} clients={clients} contracts={contracts} cleanerHomes={cleanerHomes} officeAddress={officeAddress} expenses={expenses} setCloudStatus={setCloudStatus} setLastSync={setLastSync} />}
       </div>
 
@@ -1344,13 +1363,49 @@ export default function CleaningApp() {
   );
 }
 
-function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, clients, setClientPickerFor, setBookingPinFor, contracts, generateFromContracts, exportEverythingExcel }) {
+function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, clients, saveClients, setClientPickerFor, setBookingPinFor, contracts, generateFromContracts, exportEverythingExcel, companyInfo }) {
   const dayOfWeek = new Date(date).getDay();
   const todayContracts = contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek));
+  const [showFastBooking, setShowFastBooking] = useState(false);
+
+  // Build a WhatsApp confirmation message and open the WhatsApp chat with it pre-filled.
+  // Handles UAE phone numbers: if the number doesn't start with +/00/971, prepend 971.
+  const sendWhatsAppBookingConfirmation = (b, hoursCalc, totalCalc, bookingDate) => {
+    if (!b.phone || !b.clientName) return;
+    // Sanitize phone: keep digits only, then apply UAE country prefix if missing
+    let digits = String(b.phone).replace(/[^\d]/g, '');
+    if (digits.startsWith('00')) digits = digits.slice(2);
+    if (digits.startsWith('0'))  digits = '971' + digits.slice(1); // local UAE format 05xx -> 9715xx
+    if (!digits.startsWith('971') && digits.length <= 9) digits = '971' + digits;
+    // Format the date nicely for the client (DD/MM/YYYY)
+    const dateFormatted = bookingDate ? (() => {
+      const [y, m, d] = bookingDate.split('-');
+      return `${d}/${m}/${y}`;
+    })() : bookingDate;
+    const companyName = (companyInfo && companyInfo.name) || 'AR Cleaning Services';
+    const addressPart = b.location ? `\nAddress: ${b.location}` : '';
+    const cleanerPart = b.cleaner ? `\nAssigned cleaner: ${b.cleaner}` : '';
+    const message = `Hello ${b.clientName},
+
+Your cleaning booking is confirmed. ✅
+
+📅 Date: ${dateFormatted}
+🕐 Time: ${b.timing || '—'}
+⏱️ Duration: ${hoursCalc.toFixed(1)} hours
+💰 Price: ${totalCalc.toFixed(0)} AED${cleanerPart}${addressPart}
+
+Thank you for choosing us!
+— ${companyName}`;
+    const url = `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
+    window.open(url, '_blank');
+  };
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', gap: '8px', flexWrap: 'wrap' }}>
+        <button className="btn btn-primary" onClick={() => setShowFastBooking(true)} style={{ background: colors.gold, color: colors.ink, borderColor: colors.gold, fontWeight: 700 }} title="Search a client by mobile or name, then create a booking in seconds">
+          ⚡ Fast Booking
+        </button>
         <button className="btn btn-primary" onClick={exportEverythingExcel} title="Download a complete Excel file with all your data: today's report, all history, clients, contracts, earnings, and pending payments">
           <FileSpreadsheet size={14} /> Export Everything to Excel
         </button>
@@ -1431,10 +1486,23 @@ function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, remo
                     <Td><select className="select" value={b.paymentType} onChange={e => updateBooking(b.id, 'paymentType', e.target.value)}>
                       {PAYMENT_TYPES.map(p => <option key={p}>{p}</option>)}
                     </select></Td>
-                    <Td><select className="select" value={b.paymentStatus || 'PENDING'} onChange={e => updateBooking(b.id, 'paymentStatus', e.target.value)} style={{ background: b.paymentStatus === 'PAID' ? '#D4E8DC' : '#FEE2E2' }}>
+                    <Td><select className="select" value={b.paymentStatus || 'PENDING'} onChange={e => updateBooking(b.id, 'paymentStatus', e.target.value)} style={{ background: b.paymentStatus === 'PAID' ? '#D4E8DC' : b.paymentStatus === 'CANCELLED' ? '#E5E7EB' : '#FEE2E2', color: b.paymentStatus === 'CANCELLED' ? '#6B7280' : 'inherit', fontWeight: 600 }}>
                       {PAYMENT_STATUS.map(p => <option key={p}>{p}</option>)}
                     </select></Td>
-                    <Td><button className="btn btn-danger btn-sm" onClick={() => removeBooking(b.id)} style={{ padding: '6px 8px' }}><Trash2 size={14} /></button></Td>
+                    <Td>
+                      <div style={{ display: 'flex', gap: '3px' }}>
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => sendWhatsAppBookingConfirmation(b, hours, total, date)}
+                          disabled={!b.phone || !b.clientName || b.paymentStatus === 'CANCELLED'}
+                          title={!b.phone ? 'Add phone number first' : !b.clientName ? 'Add client name first' : b.paymentStatus === 'CANCELLED' ? 'This booking is cancelled' : `Send confirmation to ${b.clientName} via WhatsApp`}
+                          style={{ padding: '6px 8px', background: b.phone && b.clientName && b.paymentStatus !== 'CANCELLED' ? '#25D366' : '#E5E7EB', color: b.phone && b.clientName && b.paymentStatus !== 'CANCELLED' ? 'white' : '#9CA3AF', borderColor: b.phone && b.clientName && b.paymentStatus !== 'CANCELLED' ? '#25D366' : '#E5E7EB', cursor: b.phone && b.clientName && b.paymentStatus !== 'CANCELLED' ? 'pointer' : 'not-allowed' }}
+                        >
+                          <MessageCircle size={14} />
+                        </button>
+                        <button className="btn btn-danger btn-sm" onClick={() => removeBooking(b.id)} style={{ padding: '6px 8px' }}><Trash2 size={14} /></button>
+                      </div>
+                    </Td>
                   </tr>
                 );
               })}
@@ -1442,8 +1510,256 @@ function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, remo
           </table>
         </div>
         <div style={{ padding: '14px 20px', background: colors.soft, fontSize: '12px', color: colors.ink + '99' }}>
-          <strong>Tips:</strong> Click <BookUser size={11} style={{ display: 'inline', verticalAlign: 'middle' }} /> to load saved client · Time format <span className="mono">8-10</span> · Mark PAID once payment received
+          <strong>Tips:</strong> Click <BookUser size={11} style={{ display: 'inline', verticalAlign: 'middle' }} /> to load saved client · Time format <span className="mono">8-10</span> · Mark PAID once payment received · Green <MessageCircle size={11} style={{ display: 'inline', verticalAlign: 'middle' }} /> button sends WhatsApp booking confirmation
         </div>
+      </div>
+
+      {showFastBooking && (
+        <FastBookingModal
+          clients={clients}
+          saveClients={saveClients}
+          activeCleaners={activeCleaners}
+          addBooking={addBooking}
+          bookings={bookings}
+          updateBooking={updateBooking}
+          date={date}
+          colors={colors}
+          onClose={() => setShowFastBooking(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ================ FAST BOOKING MODAL ================
+// A quick-entry modal that:
+//   1) Lets the user search by mobile number OR client name
+//   2) If a match is found → the client's saved details prefill a new booking
+//   3) If no match → the user can add a new client on the spot (name/phone/address)
+//   4) Then the user fills timing + cleaner + price and the booking is created
+//      and the client is saved (or updated) to the client database
+function FastBookingModal({ clients, saveClients, activeCleaners, addBooking, bookings, updateBooking, date, colors, onClose }) {
+  const [search, setSearch] = useState('');
+  const [step, setStep] = useState('search'); // 'search' | 'new-client' | 'booking'
+  const [selectedClient, setSelectedClient] = useState(null);
+  // For new-client mode
+  const [newClient, setNewClient] = useState({ name: '', phone: '', location: '', lat: null, lng: null });
+  // For booking-details step
+  const [bookingDetails, setBookingDetails] = useState({
+    timing: '', cleaner: '', pricePerHour: 25, paymentType: 'ONLINE', paymentStatus: 'PENDING', withMaterials: false, notes: '',
+  });
+
+  // Match clients by name OR phone (digit-only comparison so formats don't matter)
+  const searchDigits = search.replace(/[^\d]/g, '');
+  const matches = search.trim().length === 0 ? [] : clients.filter(c => {
+    const nameMatch = c.name && c.name.toLowerCase().includes(search.toLowerCase());
+    const phoneMatch = searchDigits.length >= 3 && c.phone && c.phone.replace(/[^\d]/g, '').includes(searchDigits);
+    return nameMatch || phoneMatch;
+  }).slice(0, 8);
+
+  const pickExistingClient = (c) => {
+    setSelectedClient(c);
+    setStep('booking');
+  };
+  const startNewClient = () => {
+    // Pre-fill: if the search looks like a phone number, seed the phone; otherwise seed the name
+    if (searchDigits.length >= 5 && searchDigits.length === search.replace(/\s/g, '').length) {
+      setNewClient(nc => ({ ...nc, phone: search.trim() }));
+    } else {
+      setNewClient(nc => ({ ...nc, name: search.trim() }));
+    }
+    setStep('new-client');
+  };
+  const saveNewClientAndContinue = () => {
+    if (!newClient.name.trim()) return alert('Client name is required');
+    // Add to client database
+    const newClientRecord = {
+      id: 'c_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      name: newClient.name.trim(),
+      phone: newClient.phone.trim(),
+      location: newClient.location.trim(),
+      lat: newClient.lat, lng: newClient.lng,
+      pricePerHour: 25,
+      notes: '',
+    };
+    saveClients([...clients, newClientRecord]);
+    setSelectedClient(newClientRecord);
+    setStep('booking');
+  };
+  const createBooking = () => {
+    if (!bookingDetails.timing.trim()) return alert('Time is required (e.g. 9-12)');
+    if (!bookingDetails.cleaner) return alert('Please pick a cleaner');
+    // Add a fresh empty booking then update its fields
+    const beforeIds = new Set(bookings.map(b => b.id));
+    addBooking();
+    // The new booking id will be assigned by addBooking. We can't easily grab it here, so
+    // set a small timeout to catch the just-added row and fill it. This mirrors how the
+    // rest of the app handles addBooking side-effects.
+    setTimeout(() => {
+      const currentIds = bookings.map(b => b.id);
+      const newRow = currentIds.find(id => !beforeIds.has(id));
+      const idToFill = newRow || (currentIds[currentIds.length - 1]);
+      if (!idToFill) return;
+      updateBooking(idToFill, 'clientName', selectedClient.name);
+      updateBooking(idToFill, 'phone', selectedClient.phone || '');
+      updateBooking(idToFill, 'location', selectedClient.location || '');
+      if (selectedClient.lat) updateBooking(idToFill, 'lat', selectedClient.lat);
+      if (selectedClient.lng) updateBooking(idToFill, 'lng', selectedClient.lng);
+      updateBooking(idToFill, 'timing', bookingDetails.timing);
+      updateBooking(idToFill, 'cleaner', bookingDetails.cleaner);
+      updateBooking(idToFill, 'pricePerHour', bookingDetails.pricePerHour);
+      updateBooking(idToFill, 'paymentType', bookingDetails.paymentType);
+      updateBooking(idToFill, 'paymentStatus', bookingDetails.paymentStatus);
+      updateBooking(idToFill, 'withMaterials', bookingDetails.withMaterials);
+      if (bookingDetails.notes) updateBooking(idToFill, 'notes', bookingDetails.notes);
+    }, 30);
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: '14px', padding: '24px', maxWidth: '560px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '18px' }}>
+          <div>
+            <h3 className="display-font" style={{ margin: 0, fontSize: '22px', fontWeight: 700 }}>⚡ Fast Booking</h3>
+            <p style={{ margin: '4px 0 0', fontSize: '13px', color: colors.ink + '99' }}>
+              {step === 'search' && 'Find the client by phone or name'}
+              {step === 'new-client' && 'Add a new client to the database'}
+              {step === 'booking' && `Fill booking details for ${selectedClient?.name}`}
+            </p>
+          </div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px', color: colors.ink + '99' }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        {step === 'search' && (
+          <>
+            <label style={{ display: 'block', marginBottom: '14px' }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Search by phone number OR name</div>
+              <input
+                type="text"
+                autoFocus
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="e.g. 050 123 4567 or Ahmed"
+                style={{ width: '100%', padding: '12px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '15px', outline: 'none' }}
+              />
+            </label>
+
+            {search.trim().length > 0 && matches.length > 0 && (
+              <div style={{ marginBottom: '12px' }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>
+                  Found {matches.length} match{matches.length > 1 ? 'es' : ''}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '260px', overflowY: 'auto' }}>
+                  {matches.map(c => (
+                    <button
+                      key={c.id}
+                      onClick={() => pickExistingClient(c)}
+                      style={{ padding: '10px 14px', background: colors.soft, border: `1px solid ${colors.border}`, borderRadius: '8px', textAlign: 'left', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '14px' }}>{c.name}</div>
+                        <div style={{ fontSize: '11px', color: colors.ink + '99' }}>
+                          {c.phone && <>📞 {c.phone}</>}
+                          {c.phone && c.location && ' · '}
+                          {c.location && <>📍 {c.location}</>}
+                        </div>
+                      </div>
+                      <ChevronRight size={16} style={{ color: colors.ink + '99' }} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {search.trim().length > 0 && matches.length === 0 && (
+              <div style={{ padding: '14px', background: '#FEF3C7', border: '1.5px solid #F59E0B', borderRadius: '10px', marginBottom: '12px', fontSize: '13px', color: '#78350F' }}>
+                No client found matching <strong>{search}</strong>.
+              </div>
+            )}
+
+            <button
+              onClick={startNewClient}
+              disabled={search.trim().length === 0}
+              className="btn btn-primary"
+              style={{ width: '100%', padding: '12px', fontSize: '14px', fontWeight: 700, opacity: search.trim().length === 0 ? 0.5 : 1, cursor: search.trim().length === 0 ? 'not-allowed' : 'pointer' }}
+            >
+              <Plus size={16} /> Add as new client
+            </button>
+          </>
+        )}
+
+        {step === 'new-client' && (
+          <>
+            <label style={{ display: 'block', marginBottom: '12px' }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Client name *</div>
+              <input type="text" autoFocus value={newClient.name} onChange={e => setNewClient({ ...newClient, name: e.target.value })} placeholder="e.g. Ahmed Khalifa" style={{ width: '100%', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px' }} />
+            </label>
+            <label style={{ display: 'block', marginBottom: '12px' }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Phone number</div>
+              <input type="tel" value={newClient.phone} onChange={e => setNewClient({ ...newClient, phone: e.target.value })} placeholder="e.g. 050 123 4567" style={{ width: '100%', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px' }} />
+            </label>
+            <label style={{ display: 'block', marginBottom: '18px' }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Address / Location</div>
+              <input type="text" value={newClient.location} onChange={e => setNewClient({ ...newClient, location: e.target.value })} placeholder="e.g. Apt 505, Marina Tower, Corniche" style={{ width: '100%', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px' }} />
+            </label>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between' }}>
+              <button onClick={() => setStep('search')} style={{ padding: '10px 18px', border: `1px solid ${colors.border}`, background: 'white', borderRadius: '8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>← Back</button>
+              <button onClick={saveNewClientAndContinue} className="btn btn-primary" style={{ padding: '10px 22px', fontSize: '13px' }}>Continue → Booking Details</button>
+            </div>
+          </>
+        )}
+
+        {step === 'booking' && selectedClient && (
+          <>
+            <div style={{ padding: '10px 12px', background: colors.accentLight, border: `1px solid ${colors.accent}`, borderRadius: '8px', marginBottom: '14px', fontSize: '13px' }}>
+              <strong>{selectedClient.name}</strong>
+              {selectedClient.phone && <><br />📞 {selectedClient.phone}</>}
+              {selectedClient.location && <><br />📍 {selectedClient.location}</>}
+            </div>
+
+            <label style={{ display: 'block', marginBottom: '10px' }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Time * (e.g. 9-12 for 9 AM to 12 PM)</div>
+              <input type="text" autoFocus value={bookingDetails.timing} onChange={e => setBookingDetails({ ...bookingDetails, timing: e.target.value })} placeholder="9-12" style={{ width: '100%', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px' }} />
+            </label>
+
+            <label style={{ display: 'block', marginBottom: '10px' }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Cleaner *</div>
+              <select value={bookingDetails.cleaner} onChange={e => setBookingDetails({ ...bookingDetails, cleaner: e.target.value })} style={{ width: '100%', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px' }}>
+                <option value="">— Select cleaner —</option>
+                {activeCleaners.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+              <label>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Price/hr (AED)</div>
+                <input type="number" value={bookingDetails.pricePerHour} onChange={e => setBookingDetails({ ...bookingDetails, pricePerHour: Number(e.target.value) })} style={{ width: '100%', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px' }} />
+              </label>
+              <label>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Payment method</div>
+                <select value={bookingDetails.paymentType} onChange={e => setBookingDetails({ ...bookingDetails, paymentType: e.target.value })} style={{ width: '100%', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px' }}>
+                  <option>CASH</option>
+                  <option>ONLINE</option>
+                </select>
+              </label>
+            </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '18px', cursor: 'pointer' }}>
+              <input type="checkbox" checked={bookingDetails.withMaterials} onChange={e => setBookingDetails({ ...bookingDetails, withMaterials: e.target.checked })} style={{ transform: 'scale(1.2)' }} />
+              <span style={{ fontSize: '13px' }}>With materials</span>
+            </label>
+
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between' }}>
+              <button onClick={() => setStep('search')} style={{ padding: '10px 18px', border: `1px solid ${colors.border}`, background: 'white', borderRadius: '8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>← Back to search</button>
+              <button onClick={createBooking} className="btn btn-primary" style={{ padding: '10px 22px', fontSize: '13px' }}>
+                <Check size={14} /> Create Booking
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1856,7 +2172,7 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
   };
 
   // Start with all unpaid jobs
-  const allPending = allBookings.filter(b => b.paymentStatus !== 'PAID' && b.total > 0);
+  const allPending = allBookings.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED' && b.total > 0);
   const allPendingTotal = allPending.reduce((s, b) => s + b.total, 0);
 
   // Apply filters (search text + date range)
@@ -2541,7 +2857,7 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
 function ReportView({ bookingsWithCalc, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, printPage, exportCSV, exportDailyReportExcel }) {
   const dayNum = new Date(date).getDate();
   const paidTotal = bookingsWithCalc.filter(b => b.paymentStatus === 'PAID').reduce((s, b) => s + b.total, 0);
-  const pendingTotal = bookingsWithCalc.filter(b => b.paymentStatus !== 'PAID').reduce((s, b) => s + b.total, 0);
+  const pendingTotal = bookingsWithCalc.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED').reduce((s, b) => s + b.total, 0);
 
   return (
     <div>
@@ -3149,7 +3465,7 @@ function MonthlyView({ allBookings, CLEANERS, colors, exportMonthlyExcel }) {
   const cashTot = filtered.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + (b.total || 0), 0);
   const onlineTot = filtered.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + (b.total || 0), 0);
   const paidTot = filtered.filter(b => b.paymentStatus === 'PAID').reduce((s, b) => s + (b.total || 0), 0);
-  const pendingTot = filtered.filter(b => b.paymentStatus !== 'PAID').reduce((s, b) => s + (b.total || 0), 0);
+  const pendingTot = filtered.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED').reduce((s, b) => s + (b.total || 0), 0);
   const uniqueClients = new Set(filtered.map(b => b.clientName)).size;
   const activeDays = new Set(filtered.map(b => b.date)).size;
 
@@ -5149,7 +5465,7 @@ function WhatsAppReminderModal({ client, companyInfo, stats, colors, onClose }) 
 // Structure: payroll[monthKey][cleanerName] = { salary, bonuses[], deductions[],
 //   attendance{dateISO: 'present'|'absent'|'half'}, workingHours, notes }
 // ============================================================================
-function PayrollView({ payroll, savePayroll, CLEANERS, PAYROLL_ROSTER, colors }) {
+function PayrollView({ payroll, savePayroll, CLEANERS, PAYROLL_ROSTER, colors, allBookings, cleanerProfiles, saveCleanerProfiles }) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth()); // 0-based
@@ -5157,6 +5473,11 @@ function PayrollView({ payroll, savePayroll, CLEANERS, PAYROLL_ROSTER, colors })
   const rosterNames = (PAYROLL_ROSTER && PAYROLL_ROSTER.length > 0) ? PAYROLL_ROSTER.map(p => p.name) : (CLEANERS || []);
   const [selectedCleaner, setSelectedCleaner] = useState(rosterNames[0] || '');
   const [tab, setTab] = useState('summary'); // summary | attendance | bonuses | deductions
+  const [viewMode, setViewMode] = useState('cards');  // cards | detail — new toggle for the card-based screen from screenshot
+
+  // Rule engine constants
+  const HOURS_THRESHOLD = 160;     // Hours worked above this in a month count as "extra"
+  const COMMISSION_PCT = 0.15;     // 15% commission on revenue generated
 
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const yearOptions = [];
@@ -5270,15 +5591,77 @@ function PayrollView({ payroll, savePayroll, CLEANERS, PAYROLL_ROSTER, colors })
     half: { bg: '#FEF3C7', border: '#F59E0B', text: '#92400E' },
   };
 
+  // ============ CARDS VIEW DATA ============
+  // Compute per-cleaner monthly stats: jobs, hours worked, revenue generated, salary, extras, commission, bonus, deduction, net.
+  // Data source: `allBookings` filtered by monthKey (string comparison to avoid timezone drift).
+  const cardsRows = rosterNames.map(name => {
+    const jobs = (allBookings || []).filter(b => b.cleaner === name && b.date && b.date.startsWith(monthKey));
+    const jobCount = jobs.length;
+    const hoursWorked = jobs.reduce((s, b) => s + (b.hours || 0), 0);
+    const revenue = jobs.reduce((s, b) => s + (b.total || 0), 0);
+
+    const rec = payroll[monthKey]?.[name] || { salary: 0, bonuses: [], deductions: [] };
+    const rosterEntry = PAYROLL_ROSTER.find(p => p.name === name);
+    const defaultSalary = rosterEntry?.defaultSalary || 0;
+    const monthlySalary = Number(rec.salary) > 0 ? Number(rec.salary) : defaultSalary;
+    // Rate/hr comes from cleanerProfiles → PAYROLL_ROSTER → fallback 20
+    const profile = (cleanerProfiles || {})[name] || {};
+    const ratePerHour = Number(profile.ratePerHour) > 0 ? Number(profile.ratePerHour) : 20;
+
+    // Rule engine
+    const baseSalary = monthlySalary;
+    const extraHours = Math.max(0, hoursWorked - HOURS_THRESHOLD);
+    const extraHoursPay = extraHours * ratePerHour;
+    const commission = revenue * COMMISSION_PCT;
+    // Sum bonuses / deductions (support both arrays [{amount, reason}] and simple number fallback)
+    const bonusesTotal = Array.isArray(rec.bonuses) ? rec.bonuses.reduce((s, x) => s + Number(x.amount || 0), 0) : Number(rec.bonuses || 0);
+    const deductionsTotal = Array.isArray(rec.deductions) ? rec.deductions.reduce((s, x) => s + Number(x.amount || 0), 0) : Number(rec.deductions || 0);
+    const netPay = baseSalary + extraHoursPay + commission + bonusesTotal - deductionsTotal;
+    return { name, jobCount, hoursWorked, revenue, monthlySalary, ratePerHour, baseSalary, extraHours, extraHoursPay, commission, bonusesTotal, deductionsTotal, netPay, role: rosterEntry?.role };
+  });
+  const kpiTotalHours = cardsRows.reduce((s, r) => s + r.hoursWorked, 0);
+  const kpiTotalPayroll = cardsRows.reduce((s, r) => s + r.netPay, 0);
+  const kpiAvgRate = cardsRows.length > 0 ? cardsRows.reduce((s, r) => s + r.ratePerHour, 0) / cardsRows.length : 0;
+
+  // Update the salary directly in payroll for a given cleaner+month
+  const setMonthlySalary = (name, value) => {
+    const monthData = payroll[monthKey] || {};
+    const existing = monthData[name] || { salary: 0, bonuses: [], deductions: [], attendance: {}, workingHours: 0, notes: '' };
+    savePayroll({ ...payroll, [monthKey]: { ...monthData, [name]: { ...existing, salary: Number(value) || 0 } } });
+    // Also update the default rate on the profile so it's reused next month
+    const profile = (cleanerProfiles || {})[name] || {};
+    saveCleanerProfiles({ ...(cleanerProfiles || {}), [name]: { ...profile, salaryPerMonth: Number(value) || 0 } });
+  };
+  const setRatePerHour = (name, value) => {
+    const profile = (cleanerProfiles || {})[name] || {};
+    saveCleanerProfiles({ ...(cleanerProfiles || {}), [name]: { ...profile, ratePerHour: Number(value) || 0 } });
+  };
+  // For bonus/deduction inline edit — we replace the whole array with a single "Payroll adjustment" entry
+  // (so the user can quickly tweak the number without going into the detail tab).
+  const setSingleAdjustment = (name, kind, value) => {
+    const monthData = payroll[monthKey] || {};
+    const existing = monthData[name] || { salary: 0, bonuses: [], deductions: [], attendance: {}, workingHours: 0, notes: '' };
+    const num = Number(value) || 0;
+    const entry = num > 0 ? [{ amount: num, reason: 'Payroll adjustment', date: new Date().toISOString().slice(0, 10) }] : [];
+    savePayroll({ ...payroll, [monthKey]: { ...monthData, [name]: { ...existing, [kind]: entry } } });
+  };
+
   return (
     <div>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Payroll</h2>
-          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Monthly salary, bonuses, deductions and attendance for each employee</p>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>
+            {viewMode === 'cards' ? 'Rules: base salary + extra hours over threshold + commission % ± adjustments' : 'Monthly salary, bonuses, deductions and attendance for each employee'}
+          </p>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* View toggle: Cards (new screen) / Detail (existing per-cleaner detail) */}
+          <div style={{ display: 'flex', background: 'white', borderRadius: '8px', padding: '4px', border: `1px solid ${colors.border}`, gap: '3px' }}>
+            <button onClick={() => setViewMode('cards')} className={viewMode === 'cards' ? 'btn btn-primary btn-sm' : 'btn btn-sm'} style={{ border: 'none' }}>Cards</button>
+            <button onClick={() => setViewMode('detail')} className={viewMode === 'detail' ? 'btn btn-primary btn-sm' : 'btn btn-sm'} style={{ border: 'none' }}>Detail</button>
+          </div>
           {PAYROLL_ROSTER && PAYROLL_ROSTER.length > 0 && (
             <button
               onClick={generateAllSalaries}
@@ -5317,6 +5700,41 @@ function PayrollView({ payroll, savePayroll, CLEANERS, PAYROLL_ROSTER, colors })
         </div>
       </div>
 
+      {/* ============ CARDS VIEW (matches screenshot 2) ============ */}
+      {viewMode === 'cards' && (
+        <div>
+          {/* Top KPIs */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+            <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '14px 18px' }}>
+              <div style={{ fontSize: '11px', color: colors.ink + '99', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}><Users size={12} /> TOTAL CLEANERS</div>
+              <div className="display-font" style={{ fontSize: '26px', fontWeight: 800, marginTop: '4px' }}>{cardsRows.length}</div>
+            </div>
+            <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '14px 18px' }}>
+              <div style={{ fontSize: '11px', color: colors.ink + '99', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}><Clock size={12} /> TOTAL HOURS</div>
+              <div className="display-font" style={{ fontSize: '26px', fontWeight: 800, marginTop: '4px' }}>{kpiTotalHours.toFixed(1)}</div>
+            </div>
+            <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '14px 18px' }}>
+              <div style={{ fontSize: '11px', color: colors.ink + '99', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}><DollarSign size={12} /> TOTAL PAYROLL</div>
+              <div className="display-font" style={{ fontSize: '26px', fontWeight: 800, marginTop: '4px', color: colors.accent }}>{kpiTotalPayroll.toFixed(2)} <span style={{ fontSize: '14px' }}>AED</span></div>
+            </div>
+            <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '14px 18px' }}>
+              <div style={{ fontSize: '11px', color: colors.ink + '99', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>% AVG RATE</div>
+              <div className="display-font" style={{ fontSize: '26px', fontWeight: 800, marginTop: '4px' }}>{kpiAvgRate.toFixed(2)}</div>
+            </div>
+          </div>
+
+          {/* Per-cleaner cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '14px', marginBottom: '20px' }}>
+            {cardsRows.map(row => (
+              <PayrollCardRow key={row.name} row={row} colors={colors} setMonthlySalary={setMonthlySalary} setRatePerHour={setRatePerHour} setSingleAdjustment={setSingleAdjustment} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ============ DETAIL VIEW (existing per-cleaner detail with tabs) ============ */}
+      {viewMode === 'detail' && (
+      <>
       {/* Employee picker (uses payroll roster: includes non-cleaners like supervisors/drivers) */}
       <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '12px', padding: '14px', marginBottom: '16px' }}>
         <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '8px' }}>Select employee</div>
@@ -5528,7 +5946,326 @@ function PayrollView({ payroll, savePayroll, CLEANERS, PAYROLL_ROSTER, colors })
           )}
         </div>
       )}
+      </>
+      )}
     </div>
+  );
+}
+
+// ============ PAYROLL CARD (per cleaner) ============
+// Renders one card matching screenshot 2:
+//   header with cleaner initial + name
+//   stats: Jobs Completed, Hours Worked, Revenue Generated (read-only)
+//   inputs: Monthly Salary, Hourly Rate (editable)
+//   derived: Base Salary, Extra Hours (>160h), Commission (15%)
+//   inputs: Bonus, Deduction
+//   footer: NET PAY (highlighted)
+function PayrollCardRow({ row, colors, setMonthlySalary, setRatePerHour, setSingleAdjustment }) {
+  const [editingSalary, setEditingSalary] = useState(String(row.monthlySalary || ''));
+  const [editingRate, setEditingRate]   = useState(String(row.ratePerHour || ''));
+  const [editingBonus, setEditingBonus] = useState(String(row.bonusesTotal || 0));
+  const [editingDeduction, setEditingDeduction] = useState(String(row.deductionsTotal || 0));
+  // Sync back when parent updates (e.g. after Generate All Salaries click)
+  useEffect(() => { setEditingSalary(String(row.monthlySalary || '')); }, [row.monthlySalary]);
+  useEffect(() => { setEditingRate(String(row.ratePerHour || '')); }, [row.ratePerHour]);
+  useEffect(() => { setEditingBonus(String(row.bonusesTotal || 0)); }, [row.bonusesTotal]);
+  useEffect(() => { setEditingDeduction(String(row.deductionsTotal || 0)); }, [row.deductionsTotal]);
+
+  return (
+    <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '12px', overflow: 'hidden' }}>
+      {/* Card header — green stripe with cleaner name + initial circle */}
+      <div style={{ background: colors.headerGreen, color: 'white', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontWeight: 700, fontSize: '15px' }}>{row.name}{row.role && row.role !== 'Cleaner' && <span style={{ fontSize: '10px', marginLeft: '6px', padding: '2px 6px', background: colors.gold, color: colors.ink, borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{row.role}</span>}</div>
+        <div style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '13px' }}>{row.name.charAt(0)}</div>
+      </div>
+
+      <div style={{ padding: '14px 16px', fontSize: '13px' }}>
+        {/* Stats rows */}
+        <PayrollCardLine label="Jobs Completed" value={row.jobCount} colors={colors} />
+        <PayrollCardLine label="Hours Worked" value={`${row.hoursWorked.toFixed(1)} hrs`} colors={colors} />
+        <PayrollCardLine label="Revenue Generated" value={`${row.revenue.toFixed(2)} AED`} colors={colors} />
+
+        {/* Editable: Monthly Salary */}
+        <PayrollCardEditRow
+          label="Monthly Salary"
+          value={editingSalary}
+          setValue={setEditingSalary}
+          onCommit={() => setMonthlySalary(row.name, editingSalary)}
+          suffix="AED"
+          colors={colors}
+        />
+        {/* Editable: Hourly Rate */}
+        <PayrollCardEditRow
+          label="Hourly Rate"
+          value={editingRate}
+          setValue={setEditingRate}
+          onCommit={() => setRatePerHour(row.name, editingRate)}
+          suffix="AED/hr"
+          colors={colors}
+        />
+
+        {/* Derived: Base Salary */}
+        <PayrollCardLine label="Base Salary" value={`${row.baseSalary.toFixed(2)} AED`} colors={colors} />
+
+        {/* Derived: Extra Hours (>160h) — highlighted green if positive */}
+        <PayrollCardLine
+          label={`Extra Hours (>160h)`}
+          value={`+${row.extraHoursPay.toFixed(2)} AED`}
+          colors={colors}
+          highlight={row.extraHoursPay > 0 ? 'positive' : null}
+        />
+
+        {/* Derived: Commission (15%) */}
+        <PayrollCardLine
+          label="Commission (15%)"
+          value={`+${row.commission.toFixed(2)} AED`}
+          colors={colors}
+          highlight={row.commission > 0 ? 'positive' : null}
+        />
+
+        {/* Editable: Bonus */}
+        <PayrollCardEditRow
+          label="Bonus"
+          value={editingBonus}
+          setValue={setEditingBonus}
+          onCommit={() => setSingleAdjustment(row.name, 'bonuses', editingBonus)}
+          suffix="AED"
+          colors={colors}
+        />
+        {/* Editable: Deduction */}
+        <PayrollCardEditRow
+          label="Deduction"
+          value={editingDeduction}
+          setValue={setEditingDeduction}
+          onCommit={() => setSingleAdjustment(row.name, 'deductions', editingDeduction)}
+          suffix="AED"
+          colors={colors}
+        />
+
+        {/* Net pay */}
+        <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: `2px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontWeight: 700, fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>NET PAY</div>
+          <div className="display-font" style={{ fontSize: '22px', fontWeight: 800, color: colors.accent }}>{row.netPay.toFixed(2)} <span style={{ fontSize: '13px' }}>AED</span></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+function PayrollCardLine({ label, value, colors, highlight }) {
+  const color = highlight === 'positive' ? '#166534' : highlight === 'negative' ? '#991B1B' : colors.ink;
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: `1px dashed ${colors.border}` }}>
+      <div style={{ color: colors.ink + '99', fontSize: '12px' }}>{label}</div>
+      <div className="mono" style={{ fontWeight: 700, color, fontSize: '13px' }}>{value}</div>
+    </div>
+  );
+}
+function PayrollCardEditRow({ label, value, setValue, onCommit, suffix, colors }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: `1px dashed ${colors.border}`, gap: '8px' }}>
+      <div style={{ color: colors.ink + '99', fontSize: '12px' }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <input
+          type="number"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          onBlur={onCommit}
+          onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+          style={{ width: '80px', padding: '4px 6px', border: `1px solid ${colors.border}`, borderRadius: '5px', fontSize: '12px', textAlign: 'right', fontFamily: 'monospace' }}
+        />
+        <div style={{ fontSize: '11px', color: colors.ink + '77', minWidth: '38px' }}>{suffix}</div>
+      </div>
+    </div>
+  );
+}
+
+// ============ CLEANERS VIEW ============
+// A dedicated page for managing cleaner PROFILES (contact info, availability, skills, rate).
+// Uses PAYROLL_ROSTER + CLEANERS to build the initial list, then persists overrides in `cleanerProfiles`.
+function CleanersView({ cleanerProfiles, saveCleanerProfiles, CLEANERS, PAYROLL_ROSTER, colors }) {
+  const [editingName, setEditingName] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newCleanerName, setNewCleanerName] = useState('');
+
+  // Build the roster: PAYROLL_ROSTER first, then any CLEANERS not already in it (deduped)
+  const baseNames = [...(PAYROLL_ROSTER || []).map(p => p.name), ...(CLEANERS || [])];
+  const seen = new Set();
+  const roster = baseNames.filter(n => { if (seen.has(n)) return false; seen.add(n); return true; });
+  // Plus any custom-added cleaner profiles (not in the base list)
+  Object.keys(cleanerProfiles || {}).forEach(n => { if (!seen.has(n)) { seen.add(n); roster.push(n); } });
+
+  const getProfile = (name) => {
+    const profile = (cleanerProfiles || {})[name] || {};
+    const rosterEntry = (PAYROLL_ROSTER || []).find(p => p.name === name);
+    return {
+      phone: profile.phone || '',
+      status: profile.status || 'Available',
+      workingDays: profile.workingDays || [true, true, true, true, true, true, true], // S M T W T F S
+      hoursStart: profile.hoursStart || '0:00',
+      hoursEnd: profile.hoursEnd || '24:00',
+      skills: profile.skills || '',
+      areas: profile.areas || '',
+      ratePerHour: profile.ratePerHour ?? 20,
+      salaryPerMonth: profile.salaryPerMonth ?? (rosterEntry?.defaultSalary || 1800),
+      role: profile.role || rosterEntry?.role || 'Cleaner',
+    };
+  };
+
+  const saveProfile = (name, next) => {
+    saveCleanerProfiles({ ...(cleanerProfiles || {}), [name]: { ...(cleanerProfiles?.[name] || {}), ...next } });
+  };
+
+  const addCleaner = () => {
+    const nm = newCleanerName.trim();
+    if (!nm) return;
+    if (roster.includes(nm)) { alert('That cleaner already exists'); return; }
+    saveProfile(nm, { phone: '', status: 'Available', workingDays: [true,true,true,true,true,true,true], hoursStart: '0:00', hoursEnd: '24:00', skills: '', areas: '', ratePerHour: 20, salaryPerMonth: 1800, role: 'Cleaner' });
+    setNewCleanerName('');
+    setShowAdd(false);
+  };
+
+  const deleteCleaner = (name) => {
+    if (!confirm(`Remove profile for ${name}? Their booking history stays intact — this only clears their profile data.`)) return;
+    const next = { ...(cleanerProfiles || {}) };
+    delete next[name];
+    saveCleanerProfiles(next);
+  };
+
+  const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Cleaners</h2>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Availability, skills, working hours & payroll basis</p>
+        </div>
+        <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
+          <Plus size={14} /> Add Cleaner
+        </button>
+      </div>
+
+      {showAdd && (
+        <div style={{ background: 'white', border: `1.5px solid ${colors.accent}`, borderRadius: '10px', padding: '14px', marginBottom: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <input type="text" autoFocus value={newCleanerName} onChange={e => setNewCleanerName(e.target.value)} placeholder="Cleaner name" style={{ flex: 1, padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '13px' }} onKeyDown={e => e.key === 'Enter' && addCleaner()} />
+          <button className="btn btn-primary" onClick={addCleaner}>Add</button>
+          <button className="btn" onClick={() => { setShowAdd(false); setNewCleanerName(''); }}>Cancel</button>
+        </div>
+      )}
+
+      <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '12px', overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+            <thead>
+              <tr style={{ background: colors.soft, borderBottom: `1px solid ${colors.border}` }}>
+                <Th>Name</Th>
+                <Th>Phone</Th>
+                <Th>Status</Th>
+                <Th>Working Days</Th>
+                <Th>Hours</Th>
+                <Th>Skills</Th>
+                <Th>Areas</Th>
+                <Th>Rate/hr</Th>
+                <Th>Salary/mo</Th>
+                <Th></Th>
+              </tr>
+            </thead>
+            <tbody>
+              {roster.map((name, idx) => {
+                const profile = getProfile(name);
+                const isEditing = editingName === name;
+                if (isEditing) return <CleanerEditRow key={name} name={name} profile={profile} onSave={(next) => { saveProfile(name, next); setEditingName(null); }} onCancel={() => setEditingName(null)} colors={colors} dayLabels={dayLabels} />;
+                return (
+                  <tr key={name} style={{ borderBottom: `1px solid ${colors.border}`, background: idx % 2 === 0 ? 'transparent' : colors.soft + '30' }}>
+                    <Td style={{ fontWeight: 700 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: colors.headerGreen, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '13px' }}>{name.charAt(0)}</div>
+                        <div>
+                          {name}
+                          {profile.role && profile.role !== 'Cleaner' && <div style={{ fontSize: '10px', color: colors.ink + '99', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>{profile.role}</div>}
+                        </div>
+                      </div>
+                    </Td>
+                    <Td className="mono">{profile.phone || '—'}</Td>
+                    <Td>
+                      <span style={{ padding: '3px 10px', borderRadius: '99px', fontSize: '10px', fontWeight: 700, background: profile.status === 'Available' ? '#DCFCE7' : '#FEE2E2', color: profile.status === 'Available' ? '#166534' : '#991B1B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        {profile.status}
+                      </span>
+                    </Td>
+                    <Td>
+                      <div style={{ display: 'flex', gap: '2px' }}>
+                        {dayLabels.map((d, i) => (
+                          <span key={i} style={{ width: '20px', height: '20px', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700, background: profile.workingDays[i] ? colors.accentLight : colors.soft, color: profile.workingDays[i] ? colors.accent : colors.ink + '55', border: `1px solid ${profile.workingDays[i] ? colors.accent : colors.border}` }}>{d}</span>
+                        ))}
+                      </div>
+                    </Td>
+                    <Td className="mono" style={{ fontSize: '11px' }}>{profile.hoursStart}–{profile.hoursEnd}</Td>
+                    <Td style={{ fontSize: '11px', maxWidth: '150px' }}>{profile.skills || '—'}</Td>
+                    <Td style={{ fontSize: '11px', maxWidth: '150px' }}>{profile.areas || '—'}</Td>
+                    <Td className="mono">{Number(profile.ratePerHour).toFixed(2)}</Td>
+                    <Td className="mono" style={{ fontWeight: 700, color: colors.accent }}>{Number(profile.salaryPerMonth).toFixed(2)}</Td>
+                    <Td>
+                      <div style={{ display: 'flex', gap: '3px' }}>
+                        <button className="btn btn-sm" onClick={() => setEditingName(name)} title="Edit cleaner"><Edit2 size={12} /></button>
+                        {!(PAYROLL_ROSTER || []).find(p => p.name === name) && !(CLEANERS || []).includes(name) && (
+                          <button className="btn btn-sm btn-danger" onClick={() => deleteCleaner(name)} title="Remove profile"><Trash2 size={12} /></button>
+                        )}
+                      </div>
+                    </Td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Edit row for a cleaner profile
+function CleanerEditRow({ name, profile, onSave, onCancel, colors, dayLabels }) {
+  const [f, setF] = useState({ ...profile });
+  const toggleDay = (i) => {
+    const wd = [...f.workingDays];
+    wd[i] = !wd[i];
+    setF({ ...f, workingDays: wd });
+  };
+  return (
+    <tr style={{ borderBottom: `1px solid ${colors.border}`, background: colors.accentLight + '55' }}>
+      <Td style={{ fontWeight: 700 }}>{name}</Td>
+      <Td><input className="input" value={f.phone} onChange={e => setF({ ...f, phone: e.target.value })} placeholder="Phone" style={{ padding: '4px 6px', fontSize: '11px', width: '120px' }} /></Td>
+      <Td>
+        <select className="select" value={f.status} onChange={e => setF({ ...f, status: e.target.value })} style={{ padding: '4px 6px', fontSize: '11px', width: '110px' }}>
+          <option>Available</option>
+          <option>Unavailable</option>
+        </select>
+      </Td>
+      <Td>
+        <div style={{ display: 'flex', gap: '2px' }}>
+          {dayLabels.map((d, i) => (
+            <button key={i} onClick={() => toggleDay(i)} style={{ width: '20px', height: '20px', borderRadius: '4px', border: `1px solid ${f.workingDays[i] ? colors.accent : colors.border}`, background: f.workingDays[i] ? colors.accentLight : 'white', color: f.workingDays[i] ? colors.accent : colors.ink + '55', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>{d}</button>
+          ))}
+        </div>
+      </Td>
+      <Td>
+        <div style={{ display: 'flex', gap: '2px', alignItems: 'center', fontSize: '11px' }}>
+          <input className="input" value={f.hoursStart} onChange={e => setF({ ...f, hoursStart: e.target.value })} placeholder="0:00" style={{ padding: '4px 6px', fontSize: '11px', width: '48px' }} />
+          <span>–</span>
+          <input className="input" value={f.hoursEnd} onChange={e => setF({ ...f, hoursEnd: e.target.value })} placeholder="24:00" style={{ padding: '4px 6px', fontSize: '11px', width: '48px' }} />
+        </div>
+      </Td>
+      <Td><input className="input" value={f.skills} onChange={e => setF({ ...f, skills: e.target.value })} placeholder="Deep clean, laundry…" style={{ padding: '4px 6px', fontSize: '11px', width: '140px' }} /></Td>
+      <Td><input className="input" value={f.areas} onChange={e => setF({ ...f, areas: e.target.value })} placeholder="Reem, Khalifa City…" style={{ padding: '4px 6px', fontSize: '11px', width: '140px' }} /></Td>
+      <Td><input className="input" type="number" step="0.5" value={f.ratePerHour} onChange={e => setF({ ...f, ratePerHour: Number(e.target.value) })} style={{ padding: '4px 6px', fontSize: '11px', width: '65px', fontFamily: 'monospace' }} /></Td>
+      <Td><input className="input" type="number" value={f.salaryPerMonth} onChange={e => setF({ ...f, salaryPerMonth: Number(e.target.value) })} style={{ padding: '4px 6px', fontSize: '11px', width: '75px', fontFamily: 'monospace' }} /></Td>
+      <Td>
+        <div style={{ display: 'flex', gap: '3px' }}>
+          <button className="btn btn-primary btn-sm" onClick={() => onSave(f)} title="Save"><Check size={12} /></button>
+          <button className="btn btn-sm" onClick={onCancel} title="Cancel"><X size={12} /></button>
+        </div>
+      </Td>
+    </tr>
   );
 }
 
