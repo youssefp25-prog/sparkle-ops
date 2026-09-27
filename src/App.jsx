@@ -483,6 +483,19 @@ export default function CleaningApp() {
   const onlineTotal = bookingsWithCalc.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + b.total, 0);
   const activeCleaners = CLEANERS.filter(c => byCleaner[c].length > 0).length;
 
+  // allCleaners = base hardcoded list + any custom cleaners added via the Cleaners tab
+  // (users can add employees like Gabby, Mylyn through the "+ Add Cleaner" button).
+  // We use this list for every cleaner dropdown so the Cleaners page and Bookings dropdown stay in sync.
+  // Filters out cleaners whose profile status is "Unavailable" so on-leave staff don't clutter the picker.
+  const allCleaners = React.useMemo(() => {
+    const custom = Object.keys(cleanerProfiles || {}).filter(n => !CLEANERS.includes(n));
+    const merged = [...CLEANERS, ...custom];
+    return merged.filter(name => {
+      const p = (cleanerProfiles || {})[name];
+      return !p || p.status !== 'Unavailable';
+    });
+  }, [cleanerProfiles]);
+
   const allBookingsWithDate = [];
   Object.entries(savedDays).forEach(([d, data]) => {
     data.bookings.forEach(b => {
@@ -1340,18 +1353,18 @@ export default function CleaningApp() {
       </div>
 
       <div style={{ padding: '32px', maxWidth: '1400px', margin: '0 auto' }}>
-        {view === 'input' && <InputView bookings={bookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} />}
+        {view === 'input' && <InputView bookings={bookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={CLEANERS} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
         {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
         {view === 'cleaners' && <CleanersView cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} />}
-        {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} exportContractsExcel={exportContractsExcel} />}
+        {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} allCleaners={allCleaners} exportContractsExcel={exportContractsExcel} />}
         {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
         {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={CLEANERS} updateBooking={updateBooking} />}
         {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} currentDate={date} currentBookings={bookings} savedDays={savedDays} />}
-        {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} payroll={payroll} savePayroll={savePayroll} PAYROLL_ROSTER={PAYROLL_ROSTER} />}
+        {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} payroll={payroll} savePayroll={savePayroll} PAYROLL_ROSTER={PAYROLL_ROSTER} cleanerProfiles={cleanerProfiles} />}
         {view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} allBookings={allBookingsWithDate} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} />}
         {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} cloudStatus={cloudStatus} lastSync={lastSync} bookings={bookings} savedDays={savedDays} clients={clients} contracts={contracts} cleanerHomes={cleanerHomes} officeAddress={officeAddress} expenses={expenses} setCloudStatus={setCloudStatus} setLastSync={setLastSync} />}
       </div>
@@ -1363,7 +1376,7 @@ export default function CleaningApp() {
   );
 }
 
-function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, clients, saveClients, setClientPickerFor, setBookingPinFor, contracts, generateFromContracts, exportEverythingExcel, companyInfo }) {
+function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, allCleaners, clients, saveClients, setClientPickerFor, setBookingPinFor, contracts, generateFromContracts, exportEverythingExcel, companyInfo }) {
   const dayOfWeek = new Date(date).getDay();
   const todayContracts = contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek));
   const [showFastBooking, setShowFastBooking] = useState(false);
@@ -1454,7 +1467,9 @@ Thank you for choosing us!
                 return (
                   <tr key={b.id} style={{ borderTop: `1px solid ${colors.border}` }}>
                     <Td><select className="select" value={b.cleaner} onChange={e => updateBooking(b.id, 'cleaner', e.target.value)}>
-                      {CLEANERS.map(c => <option key={c}>{c}</option>)}
+                      {/* Include the current cleaner even if not in allCleaners (e.g. history for a removed staff) */}
+                      {b.cleaner && !allCleaners.includes(b.cleaner) && <option key={b.cleaner}>{b.cleaner}</option>}
+                      {allCleaners.map(c => <option key={c}>{c}</option>)}
                     </select></Td>
                     <Td><input className="input" placeholder="8-10" value={b.timing} onChange={e => updateBooking(b.id, 'timing', e.target.value)} style={{ width: '90px' }} /></Td>
                     <Td>
@@ -1518,7 +1533,7 @@ Thank you for choosing us!
         <FastBookingModal
           clients={clients}
           saveClients={saveClients}
-          activeCleaners={activeCleaners}
+          allCleaners={allCleaners}
           addBooking={addBooking}
           bookings={bookings}
           updateBooking={updateBooking}
@@ -1538,7 +1553,7 @@ Thank you for choosing us!
 //   3) If no match → the user can add a new client on the spot (name/phone/address)
 //   4) Then the user fills timing + cleaner + price and the booking is created
 //      and the client is saved (or updated) to the client database
-function FastBookingModal({ clients, saveClients, activeCleaners, addBooking, bookings, updateBooking, date, colors, onClose }) {
+function FastBookingModal({ clients, saveClients, allCleaners, addBooking, bookings, updateBooking, date, colors, onClose }) {
   const [search, setSearch] = useState('');
   const [step, setStep] = useState('search'); // 'search' | 'new-client' | 'booking'
   const [selectedClient, setSelectedClient] = useState(null);
@@ -1729,7 +1744,7 @@ function FastBookingModal({ clients, saveClients, activeCleaners, addBooking, bo
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Cleaner *</div>
               <select value={bookingDetails.cleaner} onChange={e => setBookingDetails({ ...bookingDetails, cleaner: e.target.value })} style={{ width: '100%', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px' }}>
                 <option value="">— Select cleaner —</option>
-                {activeCleaners.map(c => <option key={c} value={c}>{c}</option>)}
+                {allCleaners.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </label>
 
@@ -1960,7 +1975,7 @@ function ClientPickerModal({ clients, onPick, onClose, colors }) {
   );
 }
 
-function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, exportContractsExcel }) {
+function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, allCleaners, exportContractsExcel }) {
   const [editing, setEditing] = useState(null);
 
   const startNew = () => {
@@ -2052,7 +2067,9 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, ex
               </Field>
               <Field label="Assigned Cleaner *">
                 <select className="select" value={editing.cleaner} onChange={e => setEditing({ ...editing, cleaner: e.target.value })}>
-                  {CLEANERS.map(c => <option key={c}>{c}</option>)}
+                  {/* Preserve current cleaner even if not in the active roster */}
+                  {editing.cleaner && !(allCleaners || CLEANERS).includes(editing.cleaner) && <option key={editing.cleaner}>{editing.cleaner}</option>}
+                  {(allCleaners || CLEANERS).map(c => <option key={c}>{c}</option>)}
                 </select>
               </Field>
               <Field label="Days of week *">
@@ -4729,7 +4746,7 @@ function LocationPickerModal({ title, initialLat, initialLng, initialAddress, on
   );
 }
 
-function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWithCalc, allBookings, payroll, savePayroll, PAYROLL_ROSTER }) {
+function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWithCalc, allBookings, payroll, savePayroll, PAYROLL_ROSTER, cleanerProfiles }) {
   const [editing, setEditing] = useState(null);
   const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
@@ -4779,7 +4796,18 @@ function ExpensesView({ expenses, saveExpenses, colors, totalRevenue, bookingsWi
   //   Base Salary | Bonuses (Incentive) | Deductions | Net Total
   // Grand total then adds "Other Expenses" (the regular expenses table) at the bottom.
   const payrollForMonth = (payroll && payroll[monthKeyFilter]) || {};
-  const rosterList = PAYROLL_ROSTER || [];
+  // Merge PAYROLL_ROSTER with any custom cleaners added via the Cleaners tab.
+  // Each custom cleaner gets its default salary from their profile (falls back to 1800).
+  const baseRosterList = PAYROLL_ROSTER || [];
+  const baseNames = new Set(baseRosterList.map(p => p.name));
+  const customEntries = Object.entries(cleanerProfiles || {})
+    .filter(([name]) => !baseNames.has(name))
+    .map(([name, profile]) => ({
+      name,
+      defaultSalary: Number(profile.salaryPerMonth) > 0 ? Number(profile.salaryPerMonth) : 1800,
+      role: profile.role || 'Cleaner',
+    }));
+  const rosterList = [...baseRosterList, ...customEntries];
   const payrollRows = rosterList.map(person => {
     const rec = payrollForMonth[person.name] || { salary: 0, bonuses: [], deductions: [] };
     const salary = Number(rec.salary || 0);
@@ -5469,8 +5497,15 @@ function PayrollView({ payroll, savePayroll, CLEANERS, PAYROLL_ROSTER, colors, a
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth()); // 0-based
-  // Use PAYROLL_ROSTER (which includes non-cleaners like Malek) — fallback to CLEANERS list
-  const rosterNames = (PAYROLL_ROSTER && PAYROLL_ROSTER.length > 0) ? PAYROLL_ROSTER.map(p => p.name) : (CLEANERS || []);
+  // Roster = PAYROLL_ROSTER (has Malek etc.) + any custom cleaners added via Cleaners tab
+  // that aren't already in the base list. So when the user adds Gabby or Mylyn in the
+  // Cleaners page, they automatically appear in Payroll too.
+  const rosterNames = React.useMemo(() => {
+    const base = (PAYROLL_ROSTER && PAYROLL_ROSTER.length > 0) ? PAYROLL_ROSTER.map(p => p.name) : (CLEANERS || []);
+    const baseSet = new Set(base);
+    const custom = Object.keys(cleanerProfiles || {}).filter(n => !baseSet.has(n));
+    return [...base, ...custom];
+  }, [cleanerProfiles]);
   const [selectedCleaner, setSelectedCleaner] = useState(rosterNames[0] || '');
   const [tab, setTab] = useState('summary'); // summary | attendance | bonuses | deductions
   const [viewMode, setViewMode] = useState('cards');  // cards | detail — new toggle for the card-based screen from screenshot
@@ -5486,19 +5521,24 @@ function PayrollView({ payroll, savePayroll, CLEANERS, PAYROLL_ROSTER, colors, a
   const monthName = `${months[month]} ${year}`;
 
   // One-click: fill every employee's default salary for the selected month.
+  // Includes cleaners added via the Cleaners tab (uses their salaryPerMonth profile field).
   // Preserves existing bonuses and deductions — only overwrites base salary.
   const generateAllSalaries = () => {
-    if (!PAYROLL_ROSTER || PAYROLL_ROSTER.length === 0) return;
+    if (rosterNames.length === 0) return;
     const monthData = payroll[monthKey] || {};
     const existingCount = Object.values(monthData).filter(r => (r.salary || 0) > 0).length;
     const msg = existingCount > 0
-      ? `This will set default salaries for ${PAYROLL_ROSTER.length} employees for ${monthName}, overwriting existing base salary values (bonuses & deductions kept). Continue?`
-      : `Set default salaries for ${PAYROLL_ROSTER.length} employees for ${monthName}?`;
+      ? `This will set default salaries for ${rosterNames.length} employees for ${monthName}, overwriting existing base salary values (bonuses & deductions kept). Continue?`
+      : `Set default salaries for ${rosterNames.length} employees for ${monthName}?`;
     if (!confirm(msg)) return;
     const nextMonthData = { ...monthData };
-    PAYROLL_ROSTER.forEach(person => {
-      const existing = nextMonthData[person.name] || { salary: 0, bonuses: [], deductions: [], attendance: {}, workingHours: 0, notes: '' };
-      nextMonthData[person.name] = { ...existing, salary: person.defaultSalary };
+    rosterNames.forEach(name => {
+      const rosterEntry = (PAYROLL_ROSTER || []).find(p => p.name === name);
+      const profile = (cleanerProfiles || {})[name] || {};
+      // Priority: PAYROLL_ROSTER default → profile salary → 1800 fallback
+      const defaultSalary = rosterEntry?.defaultSalary ?? (Number(profile.salaryPerMonth) > 0 ? Number(profile.salaryPerMonth) : 1800);
+      const existing = nextMonthData[name] || { salary: 0, bonuses: [], deductions: [], attendance: {}, workingHours: 0, notes: '' };
+      nextMonthData[name] = { ...existing, salary: defaultSalary };
     });
     savePayroll({ ...payroll, [monthKey]: nextMonthData });
   };
