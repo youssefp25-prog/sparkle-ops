@@ -473,20 +473,11 @@ export default function CleaningApp() {
     return { ...b, hours, total: hours * parseFloat(b.pricePerHour || 0) };
   });
 
-  const byCleaner = {};
-  CLEANERS.forEach(c => byCleaner[c] = []);
-  bookingsWithCalc.forEach(b => { if (byCleaner[b.cleaner]) byCleaner[b.cleaner].push(b); });
-
-  const totalRevenue = bookingsWithCalc.reduce((s, b) => s + b.total, 0);
-  const totalHours = bookingsWithCalc.reduce((s, b) => s + b.hours, 0);
-  const cashTotal = bookingsWithCalc.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + b.total, 0);
-  const onlineTotal = bookingsWithCalc.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + b.total, 0);
-  const activeCleaners = CLEANERS.filter(c => byCleaner[c].length > 0).length;
-
   // allCleaners = base hardcoded list + any custom cleaners added via the Cleaners tab
   // (users can add employees like Gabby, Mylyn through the "+ Add Cleaner" button).
   // We use this list for every cleaner dropdown so the Cleaners page and Bookings dropdown stay in sync.
   // Filters out cleaners whose profile status is "Unavailable" so on-leave staff don't clutter the picker.
+  // IMPORTANT: must be defined BEFORE byCleaner because byCleaner uses it.
   const allCleaners = React.useMemo(() => {
     const custom = Object.keys(cleanerProfiles || {}).filter(n => !CLEANERS.includes(n));
     const merged = [...CLEANERS, ...custom];
@@ -495,6 +486,25 @@ export default function CleaningApp() {
       return !p || p.status !== 'Unavailable';
     });
   }, [cleanerProfiles]);
+
+  // byCleaner groups today's bookings per cleaner for Deployment, Driver, etc.
+  // We initialize keys for every cleaner in allCleaners (so added cleaners like Gabby
+  // appear in the Deployment grid). As a safety net, we also auto-create a bucket for
+  // any cleaner that appears in a booking but isn't in the roster — so no bookings
+  // ever get silently dropped from the grid, even if the cleaner was removed later.
+  const byCleaner = {};
+  allCleaners.forEach(c => byCleaner[c] = []);
+  bookingsWithCalc.forEach(b => {
+    if (!b.cleaner) return;
+    if (!byCleaner[b.cleaner]) byCleaner[b.cleaner] = []; // safety: auto-create for unknown names
+    byCleaner[b.cleaner].push(b);
+  });
+
+  const totalRevenue = bookingsWithCalc.reduce((s, b) => s + b.total, 0);
+  const totalHours = bookingsWithCalc.reduce((s, b) => s + b.hours, 0);
+  const cashTotal = bookingsWithCalc.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + b.total, 0);
+  const onlineTotal = bookingsWithCalc.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + b.total, 0);
+  const activeCleaners = allCleaners.filter(c => (byCleaner[c] || []).length > 0).length;
 
   const allBookingsWithDate = [];
   Object.entries(savedDays).forEach(([d, data]) => {
@@ -1354,15 +1364,15 @@ export default function CleaningApp() {
 
       <div style={{ padding: '32px', maxWidth: '1400px', margin: '0 auto' }}>
         {view === 'input' && <InputView bookings={bookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} />}
-        {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={CLEANERS} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
+        {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
         {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
         {view === 'cleaners' && <CleanersView cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} />}
         {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} allCleaners={allCleaners} exportContractsExcel={exportContractsExcel} />}
-        {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
+        {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
-        {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={CLEANERS} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
-        {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={CLEANERS} updateBooking={updateBooking} />}
+        {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
+        {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} />}
         {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} currentDate={date} currentBookings={bookings} savedDays={savedDays} />}
         {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} payroll={payroll} savePayroll={savePayroll} PAYROLL_ROSTER={PAYROLL_ROSTER} cleanerProfiles={cleanerProfiles} />}
         {view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} allBookings={allBookingsWithDate} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} />}
@@ -2825,9 +2835,11 @@ function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
 }
 
 function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPage }) {
-  const activeCleaners = CLEANERS.filter(c => byCleaner[c].length > 0);
+  // Defensive access on byCleaner[c] — the parent now auto-creates buckets for every
+  // cleaner, but we fall back to [] here too so a missing key never crashes the grid.
+  const activeCleaners = CLEANERS.filter(c => (byCleaner[c] || []).length > 0);
   const displayCleaners = activeCleaners.length > 0 ? activeCleaners : CLEANERS.slice(0, 6);
-  const maxJobs = Math.max(1, ...displayCleaners.map(c => byCleaner[c].length));
+  const maxJobs = Math.max(1, ...displayCleaners.map(c => (byCleaner[c] || []).length));
 
   return (
     <div>
@@ -2846,7 +2858,7 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
             {Array.from({ length: maxJobs }).map((_, rowIdx) => (
               <tr key={rowIdx}>
                 {displayCleaners.map(cleaner => {
-                  const job = byCleaner[cleaner][rowIdx];
+                  const job = (byCleaner[cleaner] || [])[rowIdx];
                   if (!job) return <td key={cleaner} className="deployment-cell" style={{ background: '#fafafa' }}></td>;
                   return (
                     <td key={cleaner} className="deployment-cell" style={{ background: job.withMaterials ? colors.cellMaterials : 'white' }}>
