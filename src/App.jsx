@@ -2941,9 +2941,16 @@ function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
 }
 
 function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPage }) {
-  // Defensive access on byCleaner[c] — the parent now auto-creates buckets for every
-  // cleaner, but we fall back to [] here too so a missing key never crashes the grid.
-  const activeCleaners = CLEANERS.filter(c => (byCleaner[c] || []).length > 0);
+  // Build the list of cleaners to render as columns:
+  //   1) First, cleaners from the known roster who have bookings today (keeps familiar order)
+  //   2) Then, ANY extra cleaners found on bookings that aren't in the roster — this is the
+  //      safety net that catches cases like name casing mismatches ("GABBY" vs "Gabby"),
+  //      bookings with cleaners who were later removed from the roster, or any other scenario
+  //      where byCleaner has a key that CLEANERS doesn't contain. Previously these bookings
+  //      silently vanished from the grid.
+  const knownWithJobs = CLEANERS.filter(c => (byCleaner[c] || []).length > 0);
+  const extraWithJobs = Object.keys(byCleaner).filter(c => !CLEANERS.includes(c) && (byCleaner[c] || []).length > 0);
+  const activeCleaners = [...knownWithJobs, ...extraWithJobs];
   const displayCleaners = activeCleaners.length > 0 ? activeCleaners : CLEANERS.slice(0, 6);
   const maxJobs = Math.max(1, ...displayCleaners.map(c => (byCleaner[c] || []).length));
 
