@@ -98,6 +98,27 @@ export default function CleaningApp() {
   const [cleanerProfiles, setCleanerProfiles] = useState({});
   const [cloudStatus, setCloudStatus] = useState('connecting'); // 'connecting', 'synced', 'syncing', 'offline'
   const [lastSync, setLastSync] = useState(null);
+
+  // ============ STAFF LINKS: URL-based routing for cleaner & driver views ============
+  // The admin app runs on sparkle-ops-gamma.vercel.app (no hash).
+  // Each cleaner has a unique bookmarkable URL like .../#/me/leah-7k2m
+  // The driver has .../#/driver-x5n2
+  // We parse the hash to decide what to render. Updates on hashchange (back/forward buttons).
+  const [routeHash, setRouteHash] = useState(() => (typeof window !== 'undefined' ? window.location.hash : ''));
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onHashChange = () => setRouteHash(window.location.hash);
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+  // Parse the hash into a route object: { kind: 'admin' | 'cleaner' | 'driver', slug: string }
+  const route = React.useMemo(() => {
+    const h = (routeHash || '').replace(/^#\/?/, '').trim();
+    if (!h) return { kind: 'admin' };
+    if (h.startsWith('me/')) return { kind: 'cleaner', slug: h.slice(3) };
+    if (h.startsWith('driver-') || h === 'driver') return { kind: 'driver', slug: h };
+    return { kind: 'admin' };
+  }, [routeHash]);
   const [companyInfo, setCompanyInfo] = useState({
     name: 'AR Cleaning Services',
     address: 'Office 92, M-floor Al Jazeera Bldg, Abu Dhabi City, UAE',
@@ -1406,6 +1427,17 @@ export default function CleaningApp() {
     cellPlain: '#F5EFD9', priceRed: '#B8472A', warning: '#D97706'
   };
 
+  // ====== EARLY RETURN FOR STAFF ROUTES ======
+  // When the URL hash is #/me/<slug> or #/driver-<slug>, show the mobile-friendly
+  // staff view instead of the admin app. These views are read-only (except Mark Done)
+  // and completely hide financial data.
+  if (route.kind === 'cleaner') {
+    return <CleanerSchedulePage slug={route.slug} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} companyInfo={companyInfo} cleanerProfiles={cleanerProfiles} />;
+  }
+  if (route.kind === 'driver') {
+    return <DriverSchedulePage slug={route.slug} savedDays={savedDays} bookings={bookings} date={date} companyInfo={companyInfo} cleanerHomes={cleanerHomes} officeAddress={officeAddress} />;
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: colors.bg, fontFamily: '"Inter", -apple-system, sans-serif', color: colors.ink }}>
       <style>{`
@@ -1460,6 +1492,7 @@ export default function CleaningApp() {
           <button className={`tab ${view === 'report' ? 'active' : ''}`} onClick={() => setView('report')}><FileText size={15} /> Daily Report</button>
           <button className={`tab ${view === 'clients' ? 'active' : ''}`} onClick={() => setView('clients')}><BookUser size={15} /> Clients ({clients.length})</button>
           <button className={`tab ${view === 'cleaners' ? 'active' : ''}`} onClick={() => setView('cleaners')}><Users size={15} /> Cleaners</button>
+          <button className={`tab ${view === 'staff-links' ? 'active' : ''}`} onClick={() => setView('staff-links')}><Phone size={15} /> Staff Links</button>
           <button className={`tab ${view === 'contracts' ? 'active' : ''}`} onClick={() => setView('contracts')}><Repeat size={15} /> Contracts ({contracts.filter(c=>c.active).length})</button>
           <button className={`tab ${view === 'earnings' ? 'active' : ''}`} onClick={() => setView('earnings')}><TrendingUp size={15} /> Earnings</button>
           <button className={`tab ${view === 'pending' ? 'active' : ''}`} onClick={() => setView('pending')}><AlertCircle size={15} /> Pending</button>
@@ -1478,6 +1511,7 @@ export default function CleaningApp() {
         {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
         {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
         {view === 'cleaners' && <CleanersView cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} />}
+        {view === 'staff-links' && <StaffLinksView allCleaners={allCleaners} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
         {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} allCleaners={allCleaners} exportContractsExcel={exportContractsExcel} />}
         {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
@@ -6483,3 +6517,637 @@ function SummaryBox({ label, value, colors, highlight, warning }) {
     </div>
   );
 }
+
+// ============================================================================
+// STAFF LINK PAGES — mobile-friendly views for cleaners & driver
+// Accessed via unique bookmarkable URLs (e.g. sparkle-ops.vercel.app/#/me/leah-7k2m)
+// No login required; the URL slug IS the access key.
+// Each page is self-contained: pulls data from Supabase directly (via props),
+// and only shows what the staff member needs. Hides all financial/admin UI.
+// ============================================================================
+
+// Helper: slug a cleaner name for URLs (e.g. "Leah" → "leah", "Al Mas" → "al-mas")
+const slugifyName = (name) => (name || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+// Helper: parse "leah-7k2m" into {name: "leah", code: "7k2m"}
+const parseStaffSlug = (slug) => {
+  if (!slug) return { name: '', code: '' };
+  const lastDash = slug.lastIndexOf('-');
+  if (lastDash === -1) return { name: slug.toLowerCase(), code: '' };
+  return { name: slug.slice(0, lastDash).toLowerCase(), code: slug.slice(lastDash + 1) };
+};
+
+// Shared mobile styles
+const staffStyles = {
+  bg: '#F5F0E6',
+  cardBg: '#FFFFFF',
+  text: '#1A1A1A',
+  textMuted: '#6B7280',
+  accent: '#0F4C3A',
+  accentLight: '#D4E8DC',
+  gold: '#C9A449',
+  border: '#E5E7EB',
+  danger: '#B8472A',
+  success: '#166534',
+};
+
+// Format a date string to a nice label like "Sunday, October 4"
+const formatNiceDate = (dateStr) => {
+  if (!dateStr) return '';
+  const d = new Date(dateStr + 'T12:00:00'); // noon to avoid timezone drift
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+};
+
+// Add days to a YYYY-MM-DD string
+const addDaysToDateStr = (dateStr, delta) => {
+  if (!dateStr) return '';
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() + delta);
+  return d.toISOString().slice(0, 10);
+};
+
+// ============ CLEANER SCHEDULE PAGE ============
+// Shows one cleaner's jobs for the viewed date.
+// slug format: "<cleanername>-<code>" (e.g. "leah-7k2m")
+function CleanerSchedulePage({ slug, savedDays, setSavedDays, bookings, setBookings, date, companyInfo, cleanerProfiles }) {
+  const parsed = parseStaffSlug(slug);
+  const [viewDate, setViewDate] = useState(() => new Date().toISOString().slice(0, 10));
+
+  // Resolve the slug name back to a real cleaner name.
+  // Build a map of all known cleaner names (from current bookings, saved days, and profiles)
+  // keyed by their slug, so we handle any case/spelling of the name.
+  const nameMap = React.useMemo(() => {
+    const all = new Set();
+    Object.values(savedDays || {}).forEach(day => {
+      (day.bookings || []).forEach(b => { if (b.cleaner) all.add(b.cleaner); });
+    });
+    (bookings || []).forEach(b => { if (b.cleaner) all.add(b.cleaner); });
+    Object.keys(cleanerProfiles || {}).forEach(n => all.add(n));
+    const map = {};
+    all.forEach(name => { map[slugifyName(name)] = name; });
+    return map;
+  }, [savedDays, bookings, cleanerProfiles]);
+  const cleanerName = nameMap[parsed.name] || parsed.name;
+
+  // Collect the cleaner's jobs for the viewed date.
+  // If the viewed date is today AND equals the admin's current date, use live bookings;
+  // otherwise look up savedDays.
+  const myJobs = React.useMemo(() => {
+    let dayBookings = [];
+    if (viewDate === date && Array.isArray(bookings) && bookings.length > 0) {
+      dayBookings = bookings;
+    } else if (savedDays && savedDays[viewDate]) {
+      dayBookings = savedDays[viewDate].bookings || [];
+    }
+    return dayBookings.filter(b => {
+      if (!b.cleaner) return false;
+      // Case-insensitive match to handle "Leah" vs "leah" vs "LEAH"
+      return slugifyName(b.cleaner) === parsed.name;
+    }).map(b => {
+      // Compute hours and total so the display doesn't depend on admin pre-calc
+      const parseHrs = (t) => {
+        if (!t) return 0;
+        const m = String(t).replace(/\s/g, '').match(/^(\d+)(?::(\d+))?-(\d+)(?::(\d+))?/);
+        if (!m) return 0;
+        let s = parseInt(m[1]) + parseInt(m[2] || 0) / 60;
+        let e = parseInt(m[3]) + parseInt(m[4] || 0) / 60;
+        if (e < s) e += 12;
+        return Math.max(0, e - s);
+      };
+      const hours = typeof b.hours === 'number' ? b.hours : parseHrs(b.timing);
+      const total = typeof b.total === 'number' ? b.total : hours * parseFloat(b.pricePerHour || 0);
+      return { ...b, hours, total };
+    }).sort((a, b) => {
+      const parseStart = (t) => {
+        if (!t) return 999;
+        const m = String(t).replace(/\s/g, '').match(/^(\d+)(?::(\d+))?/);
+        return m ? parseInt(m[1]) + parseInt(m[2] || 0) / 60 : 999;
+      };
+      return parseStart(a.timing) - parseStart(b.timing);
+    });
+  }, [viewDate, date, bookings, savedDays, parsed.name]);
+
+  const totalHours = myJobs.reduce((s, b) => s + (b.hours || 0), 0);
+  const doneJobs = myJobs.filter(b => b.jobStatus === 'DONE').length;
+  const isToday = viewDate === new Date().toISOString().slice(0, 10);
+  const dateLabel = formatNiceDate(viewDate);
+
+  // Mark a job as DONE (or undo). Updates savedDays (and bookings if viewing current admin day).
+  const toggleDone = async (jobId) => {
+    const applyUpdate = (list) => list.map(b => b.id === jobId ? { ...b, jobStatus: b.jobStatus === 'DONE' ? 'PENDING' : 'DONE' } : b);
+    // Update savedDays for the viewed date
+    if (savedDays && savedDays[viewDate]) {
+      const updated = { ...savedDays, [viewDate]: { ...savedDays[viewDate], bookings: applyUpdate(savedDays[viewDate].bookings) } };
+      setSavedDays(updated);
+      try { localStorage.setItem('sparkle_all_days', JSON.stringify(updated)); } catch (e) {}
+      // Cloud sync (fire and forget)
+      try {
+        await supabase.from('days').upsert({ date: viewDate, bookings: updated[viewDate].bookings, saved_at: new Date().toISOString() });
+      } catch (e) { console.error('Cloud sync (toggleDone):', e); }
+    }
+    // Also update live bookings if viewing the admin's current day
+    if (viewDate === date) {
+      setBookings(applyUpdate(bookings));
+    }
+  };
+
+  // Open address in Google Maps
+  const openMaps = (location, lat, lng) => {
+    const url = lat && lng
+      ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location || '')}`;
+    window.open(url, '_blank');
+  };
+
+  return (
+    <div style={{ minHeight: '100vh', background: staffStyles.bg, fontFamily: '"Inter", -apple-system, sans-serif', color: staffStyles.text }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=Inter:wght@400;500;600;700&display=swap');
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        .display-font { font-family: 'Fraunces', serif; letter-spacing: -0.02em; }
+        body { margin: 0; }
+      `}</style>
+
+      {/* Header */}
+      <div style={{ background: staffStyles.accent, color: 'white', padding: '20px 16px 24px', borderRadius: '0 0 20px 20px' }}>
+        <div style={{ maxWidth: '480px', margin: '0 auto' }}>
+          <div style={{ fontSize: '12px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>
+            {companyInfo?.name || 'AR Cleaning Services'}
+          </div>
+          <h1 className="display-font" style={{ margin: '6px 0 2px', fontSize: '28px', fontWeight: 800, textTransform: 'capitalize' }}>
+            👋 {cleanerName}'s Schedule
+          </h1>
+          <div style={{ fontSize: '14px', opacity: 0.85 }}>{dateLabel}</div>
+
+          {/* Stats row */}
+          <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
+            <div style={{ flex: 1, background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '11px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Jobs</div>
+              <div className="display-font" style={{ fontSize: '22px', fontWeight: 800, marginTop: '2px' }}>{myJobs.length}</div>
+            </div>
+            <div style={{ flex: 1, background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '11px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Hours</div>
+              <div className="display-font" style={{ fontSize: '22px', fontWeight: 800, marginTop: '2px' }}>{totalHours.toFixed(1)}</div>
+            </div>
+            <div style={{ flex: 1, background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '11px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Done</div>
+              <div className="display-font" style={{ fontSize: '22px', fontWeight: 800, marginTop: '2px' }}>{doneJobs}/{myJobs.length}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Day nav */}
+      <div style={{ maxWidth: '480px', margin: '16px auto 0', padding: '0 16px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <button onClick={() => setViewDate(addDaysToDateStr(viewDate, -1))} style={{ flex: 1, padding: '12px', background: 'white', border: `1px solid ${staffStyles.border}`, borderRadius: '10px', fontSize: '14px', fontWeight: 600, cursor: 'pointer', color: staffStyles.text }}>
+          ◀ Yesterday
+        </button>
+        {!isToday && (
+          <button onClick={() => setViewDate(new Date().toISOString().slice(0, 10))} style={{ padding: '12px 16px', background: staffStyles.gold, border: `1px solid ${staffStyles.gold}`, borderRadius: '10px', fontSize: '13px', fontWeight: 700, cursor: 'pointer', color: staffStyles.text }}>
+            Today
+          </button>
+        )}
+        <button onClick={() => setViewDate(addDaysToDateStr(viewDate, 1))} style={{ flex: 1, padding: '12px', background: 'white', border: `1px solid ${staffStyles.border}`, borderRadius: '10px', fontSize: '14px', fontWeight: 600, cursor: 'pointer', color: staffStyles.text }}>
+          Tomorrow ▶
+        </button>
+      </div>
+
+      {/* Job cards */}
+      <div style={{ maxWidth: '480px', margin: '16px auto 20px', padding: '0 16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {myJobs.length === 0 && (
+          <div style={{ background: staffStyles.cardBg, padding: '40px 20px', textAlign: 'center', borderRadius: '12px', border: `1px solid ${staffStyles.border}` }}>
+            <div style={{ fontSize: '42px', marginBottom: '8px' }}>😌</div>
+            <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '4px' }}>No jobs scheduled</div>
+            <div style={{ fontSize: '13px', color: staffStyles.textMuted }}>Enjoy your {isToday ? 'day' : 'break'}!</div>
+          </div>
+        )}
+        {myJobs.map((job, idx) => {
+          const isDone = job.jobStatus === 'DONE';
+          return (
+            <div key={job.id || idx} style={{ background: staffStyles.cardBg, borderRadius: '14px', border: `1.5px solid ${isDone ? staffStyles.success : staffStyles.border}`, overflow: 'hidden', opacity: isDone ? 0.75 : 1 }}>
+              {/* Time strip */}
+              <div style={{ background: isDone ? staffStyles.success : staffStyles.accent, color: 'white', padding: '8px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontSize: '13px', fontWeight: 700, fontFamily: 'monospace' }}>
+                  🕐 {job.timing || '—'}
+                </div>
+                <div style={{ fontSize: '11px', background: 'rgba(255,255,255,0.2)', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
+                  {job.hours.toFixed(1)}h
+                </div>
+              </div>
+              <div style={{ padding: '14px' }}>
+                <div style={{ fontSize: '16px', fontWeight: 700, textDecoration: isDone ? 'line-through' : 'none', marginBottom: '4px' }}>
+                  {job.clientName || 'Client'}
+                </div>
+                {job.location && (
+                  <div style={{ fontSize: '13px', color: staffStyles.textMuted, marginBottom: '8px', lineHeight: 1.4 }}>
+                    📍 {job.location}
+                  </div>
+                )}
+                {job.withMaterials && (
+                  <div style={{ display: 'inline-block', fontSize: '11px', padding: '3px 8px', background: staffStyles.accentLight, color: staffStyles.accent, borderRadius: '4px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                    ✨ Bring materials
+                  </div>
+                )}
+                {job.notes && (
+                  <div style={{ fontSize: '12px', padding: '8px 10px', background: '#FFF8E7', borderRadius: '6px', borderLeft: `3px solid ${staffStyles.gold}`, color: staffStyles.text, marginBottom: '10px' }}>
+                    📝 {job.notes}
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                  {job.location && (
+                    <button onClick={() => openMaps(job.location, job.lat, job.lng)} style={{ flex: '1 1 120px', padding: '10px', background: '#4285F4', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                      🗺️ Maps
+                    </button>
+                  )}
+                  <button onClick={() => toggleDone(job.id)} style={{ flex: '1 1 120px', padding: '10px', background: isDone ? staffStyles.textMuted : staffStyles.success, color: 'white', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                    {isDone ? '↩ Undo' : '✓ Mark Done'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Footer */}
+      <div style={{ textAlign: 'center', padding: '20px', fontSize: '11px', color: staffStyles.textMuted }}>
+        Powered by {companyInfo?.name || 'AR Cleaning Services'} · Bookmark this page on your home screen 📱
+      </div>
+    </div>
+  );
+}
+
+// ============ DRIVER SCHEDULE PAGE ============
+// Shows all pickups + drop-offs for the day, sorted by time.
+// Each stop has Waze + Google Maps buttons.
+function DriverSchedulePage({ slug, savedDays, bookings, date, companyInfo, cleanerHomes, officeAddress }) {
+  const [viewDate, setViewDate] = useState(() => new Date().toISOString().slice(0, 10));
+
+  // Collect all bookings for the viewed date
+  const dayBookings = React.useMemo(() => {
+    if (viewDate === date && Array.isArray(bookings) && bookings.length > 0) {
+      return bookings;
+    }
+    return (savedDays && savedDays[viewDate]?.bookings) || [];
+  }, [viewDate, date, bookings, savedDays]);
+
+  // Build the trip list: group by cleaner, then sort each cleaner's jobs by time.
+  // For each cleaner, emit stops: pickup (home/office) → job 1 → job 2 → ...
+  const stops = React.useMemo(() => {
+    const parseStart = (t) => {
+      if (!t) return 999;
+      const m = String(t).replace(/\s/g, '').match(/^(\d+)(?::(\d+))?/);
+      return m ? parseInt(m[1]) + parseInt(m[2] || 0) / 60 : 999;
+    };
+
+    const byCleaner = {};
+    dayBookings.filter(b => b.cleaner && b.location).forEach(b => {
+      if (!byCleaner[b.cleaner]) byCleaner[b.cleaner] = [];
+      byCleaner[b.cleaner].push(b);
+    });
+
+    const list = [];
+    Object.entries(byCleaner).forEach(([cleaner, jobs]) => {
+      const sorted = jobs.sort((a, b) => parseStart(a.timing) - parseStart(b.timing));
+      sorted.forEach((job, idx) => {
+        if (idx === 0) {
+          // Pickup from home or office
+          const useHome = job.pickupType === 'HOME';
+          const home = (cleanerHomes || {})[cleaner];
+          list.push({
+            id: `${job.id}-pickup`,
+            type: 'pickup',
+            cleaner,
+            time: job.timing ? job.timing.split('-')[0].trim() : '',
+            label: useHome ? `Pickup ${cleaner} at home` : `Pickup ${cleaner} at office`,
+            address: useHome ? (home?.address || `${cleaner}'s home (not set)`) : (officeAddress?.address || 'Office'),
+            lat: useHome ? home?.lat : officeAddress?.lat,
+            lng: useHome ? home?.lng : officeAddress?.lng,
+            relatedJob: job,
+          });
+        }
+        // Drop off at the job
+        list.push({
+          id: `${job.id}-drop`,
+          type: 'drop',
+          cleaner,
+          time: job.timing ? job.timing.split('-')[0].trim() : '',
+          label: `Drop ${cleaner} at ${job.clientName || 'client'}`,
+          address: job.location,
+          lat: job.lat,
+          lng: job.lng,
+          relatedJob: job,
+        });
+      });
+    });
+
+    return list.sort((a, b) => parseStart(a.time + '-00') - parseStart(b.time + '-00'));
+  }, [dayBookings, cleanerHomes, officeAddress]);
+
+  const openWaze = (address, lat, lng) => {
+    const url = lat && lng
+      ? `https://www.waze.com/ul?ll=${lat}%2C${lng}&navigate=yes`
+      : `https://www.waze.com/ul?q=${encodeURIComponent(address || '')}&navigate=yes`;
+    window.open(url, '_blank');
+  };
+  const openGoogleMaps = (address, lat, lng) => {
+    const url = lat && lng
+      ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`
+      : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address || '')}`;
+    window.open(url, '_blank');
+  };
+
+  const isToday = viewDate === new Date().toISOString().slice(0, 10);
+  const dateLabel = formatNiceDate(viewDate);
+
+  return (
+    <div style={{ minHeight: '100vh', background: staffStyles.bg, fontFamily: '"Inter", -apple-system, sans-serif', color: staffStyles.text }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=Inter:wght@400;500;600;700&display=swap');
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        .display-font { font-family: 'Fraunces', serif; letter-spacing: -0.02em; }
+        body { margin: 0; }
+      `}</style>
+
+      <div style={{ background: staffStyles.accent, color: 'white', padding: '20px 16px 24px', borderRadius: '0 0 20px 20px' }}>
+        <div style={{ maxWidth: '560px', margin: '0 auto' }}>
+          <div style={{ fontSize: '12px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>
+            {companyInfo?.name || 'AR Cleaning Services'}
+          </div>
+          <h1 className="display-font" style={{ margin: '6px 0 2px', fontSize: '28px', fontWeight: 800 }}>
+            🚐 Driver Schedule
+          </h1>
+          <div style={{ fontSize: '14px', opacity: 0.85 }}>{dateLabel}</div>
+
+          <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
+            <div style={{ flex: 1, background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '11px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Trips</div>
+              <div className="display-font" style={{ fontSize: '22px', fontWeight: 800, marginTop: '2px' }}>{stops.length}</div>
+            </div>
+            <div style={{ flex: 1, background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '11px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pickups</div>
+              <div className="display-font" style={{ fontSize: '22px', fontWeight: 800, marginTop: '2px' }}>{stops.filter(s => s.type === 'pickup').length}</div>
+            </div>
+            <div style={{ flex: 1, background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '11px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Drops</div>
+              <div className="display-font" style={{ fontSize: '22px', fontWeight: 800, marginTop: '2px' }}>{stops.filter(s => s.type === 'drop').length}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Day nav */}
+      <div style={{ maxWidth: '560px', margin: '16px auto 0', padding: '0 16px', display: 'flex', gap: '8px' }}>
+        <button onClick={() => setViewDate(addDaysToDateStr(viewDate, -1))} style={{ flex: 1, padding: '12px', background: 'white', border: `1px solid ${staffStyles.border}`, borderRadius: '10px', fontSize: '14px', fontWeight: 600, cursor: 'pointer', color: staffStyles.text }}>
+          ◀ Yesterday
+        </button>
+        {!isToday && (
+          <button onClick={() => setViewDate(new Date().toISOString().slice(0, 10))} style={{ padding: '12px 16px', background: staffStyles.gold, border: `1px solid ${staffStyles.gold}`, borderRadius: '10px', fontSize: '13px', fontWeight: 700, cursor: 'pointer', color: staffStyles.text }}>
+            Today
+          </button>
+        )}
+        <button onClick={() => setViewDate(addDaysToDateStr(viewDate, 1))} style={{ flex: 1, padding: '12px', background: 'white', border: `1px solid ${staffStyles.border}`, borderRadius: '10px', fontSize: '14px', fontWeight: 600, cursor: 'pointer', color: staffStyles.text }}>
+          Tomorrow ▶
+        </button>
+      </div>
+
+      {/* Stops list */}
+      <div style={{ maxWidth: '560px', margin: '16px auto 20px', padding: '0 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {stops.length === 0 && (
+          <div style={{ background: staffStyles.cardBg, padding: '40px 20px', textAlign: 'center', borderRadius: '12px', border: `1px solid ${staffStyles.border}` }}>
+            <div style={{ fontSize: '42px', marginBottom: '8px' }}>🚗</div>
+            <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '4px' }}>No trips scheduled</div>
+            <div style={{ fontSize: '13px', color: staffStyles.textMuted }}>Nothing to drive today.</div>
+          </div>
+        )}
+        {stops.map((stop, idx) => {
+          const isPickup = stop.type === 'pickup';
+          return (
+            <div key={stop.id || idx} style={{ background: staffStyles.cardBg, borderRadius: '12px', border: `1.5px solid ${staffStyles.border}`, padding: '12px 14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '6px' }}>
+                <div style={{ fontSize: '12px', padding: '3px 10px', borderRadius: '99px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', background: isPickup ? staffStyles.gold : staffStyles.accent, color: isPickup ? staffStyles.text : 'white' }}>
+                  {isPickup ? '🧍 Pickup' : '📍 Drop'}
+                </div>
+                <div style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'monospace', color: staffStyles.textMuted }}>
+                  {stop.time || '—'}
+                </div>
+              </div>
+              <div style={{ fontSize: '15px', fontWeight: 700, marginBottom: '2px' }}>
+                {stop.label}
+              </div>
+              <div style={{ fontSize: '12px', color: staffStyles.textMuted, marginBottom: '10px', lineHeight: 1.4 }}>
+                {stop.address || '—'}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => openWaze(stop.address, stop.lat, stop.lng)} style={{ flex: 1, padding: '10px', background: '#33CCFF', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                  🟢 Waze
+                </button>
+                <button onClick={() => openGoogleMaps(stop.address, stop.lat, stop.lng)} style={{ flex: 1, padding: '10px', background: '#4285F4', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                  🔵 Maps
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ textAlign: 'center', padding: '20px', fontSize: '11px', color: staffStyles.textMuted }}>
+        Powered by {companyInfo?.name || 'AR Cleaning Services'} · Bookmark this page 📱
+      </div>
+    </div>
+  );
+}
+
+
+// ============ STAFF LINKS ADMIN VIEW ============
+// Shows the per-cleaner & driver bookmarkable URLs. One-tap share via WhatsApp.
+// URL slugs are stored per-cleaner (so they stay stable even if names change)
+// and in companyInfo for the driver's slug.
+function StaffLinksView({ allCleaners, cleanerProfiles, saveCleanerProfiles, companyInfo, saveCompanyInfo, colors }) {
+  // Generate a random 4-char slug code (lowercase alphanumeric)
+  const randCode = () => Math.random().toString(36).slice(2, 6);
+
+  // Base URL for the staff links. Uses current origin so works in both local dev and production.
+  const baseUrl = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '';
+
+  // Get or generate a cleaner's URL code (stored in their profile)
+  const getCleanerSlug = (name) => {
+    const profile = (cleanerProfiles || {})[name];
+    const code = profile?.urlCode || randCode();
+    return `${slugifyName(name)}-${code}`;
+  };
+
+  // Regenerate (revoke old link + create new one). Pushes a new urlCode to the profile.
+  const regenerateCleanerLink = (name) => {
+    if (!confirm(`Regenerate ${name}'s link? The old link will stop working — anyone with the old URL won't see her schedule anymore.`)) return;
+    const profile = (cleanerProfiles || {})[name] || {};
+    saveCleanerProfiles({ ...(cleanerProfiles || {}), [name]: { ...profile, urlCode: randCode() } });
+  };
+
+  // Create a profile entry on first access so the urlCode persists
+  const ensureCleanerHasCode = (name) => {
+    const profile = (cleanerProfiles || {})[name];
+    if (!profile?.urlCode) {
+      saveCleanerProfiles({
+        ...(cleanerProfiles || {}),
+        [name]: { ...(profile || {}), urlCode: randCode(), status: profile?.status || 'Available' }
+      });
+    }
+  };
+
+  // Driver slug lives in companyInfo
+  const driverCode = companyInfo?.driverUrlCode || '';
+  const driverSlug = driverCode ? `driver-${driverCode}` : '';
+
+  const regenerateDriverLink = () => {
+    if (driverCode && !confirm('Regenerate the driver link? The old link will stop working.')) return;
+    saveCompanyInfo({ ...(companyInfo || {}), driverUrlCode: randCode() });
+  };
+
+  // Build full URL from slug
+  const fullUrl = (slug, kind) => {
+    if (!slug) return '';
+    if (kind === 'driver') return `${baseUrl}#/${slug}`;
+    return `${baseUrl}#/me/${slug}`;
+  };
+
+  // Copy to clipboard with feedback
+  const [copiedFor, setCopiedFor] = useState('');
+  const copyLink = async (url, key) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedFor(key);
+      setTimeout(() => setCopiedFor(''), 2000);
+    } catch (e) {
+      alert('Could not copy. Long-press the URL and copy manually.');
+    }
+  };
+
+  // Share via WhatsApp (opens WhatsApp with the message pre-filled; needs a phone)
+  const shareWhatsApp = (name, url, phone) => {
+    const message = `Hi ${name}! 👋\n\nHere's your personal schedule link. Bookmark it on your phone — tap it every morning to see your jobs for the day.\n\n${url}\n\n— ${companyInfo?.name || 'AR Cleaning Services'}`;
+    let digits = String(phone || '').replace(/[^\d]/g, '');
+    if (digits.startsWith('00')) digits = digits.slice(2);
+    if (digits.startsWith('0'))  digits = '971' + digits.slice(1);
+    if (!digits.startsWith('971') && digits.length <= 9) digits = '971' + digits;
+    const waUrl = digits ? `https://wa.me/${digits}?text=${encodeURIComponent(message)}` : `https://wa.me/?text=${encodeURIComponent(message)}`;
+    window.open(waUrl, '_blank');
+  };
+
+  const openPreview = (url) => window.open(url, '_blank');
+
+  return (
+    <div>
+      <div style={{ marginBottom: '20px' }}>
+        <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Staff Links</h2>
+        <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>
+          Each cleaner & the driver gets their own unique URL. Send it via WhatsApp — they bookmark it on their phone and open it every morning.
+        </p>
+      </div>
+
+      {/* Info banner */}
+      <div style={{ background: colors.accentLight, border: `1px solid ${colors.accent}`, borderRadius: '10px', padding: '14px 16px', marginBottom: '20px', fontSize: '13px', color: colors.ink }}>
+        <div style={{ fontWeight: 700, marginBottom: '4px' }}>🔒 How this works</div>
+        <ul style={{ margin: '0', paddingLeft: '20px', lineHeight: 1.6 }}>
+          <li>Each link is unique and private. Don't share it publicly.</li>
+          <li>Cleaners see <strong>only their own</strong> jobs (today + browse other days).</li>
+          <li>Drivers see <strong>pickup/drop-off schedule</strong> with Waze + Google Maps buttons.</li>
+          <li>If a staff member leaves or loses their phone, click <strong>Regenerate</strong> to revoke their old link.</li>
+        </ul>
+      </div>
+
+      {/* Driver link card */}
+      <div style={{ background: 'white', border: `1.5px solid ${colors.accent}`, borderRadius: '12px', padding: '18px', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
+          <div>
+            <div style={{ fontSize: '11px', color: colors.ink + '99', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>🚐 Driver</div>
+            <div className="display-font" style={{ fontSize: '20px', fontWeight: 700, marginTop: '2px' }}>Driver Schedule Link</div>
+          </div>
+          {!driverSlug && (
+            <button className="btn btn-primary" onClick={regenerateDriverLink} style={{ fontSize: '13px' }}>
+              <Plus size={14} /> Generate Driver Link
+            </button>
+          )}
+        </div>
+        {driverSlug ? (
+          <div>
+            <div className="mono" style={{ padding: '10px 12px', background: colors.soft, borderRadius: '8px', fontSize: '12px', marginBottom: '10px', wordBreak: 'break-all', border: `1px solid ${colors.border}` }}>
+              {fullUrl(driverSlug, 'driver')}
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              <button className="btn btn-sm" onClick={() => copyLink(fullUrl(driverSlug, 'driver'), 'driver')} style={{ fontSize: '12px' }}>
+                {copiedFor === 'driver' ? '✓ Copied!' : '📋 Copy'}
+              </button>
+              <button className="btn btn-sm" onClick={() => openPreview(fullUrl(driverSlug, 'driver'))} style={{ fontSize: '12px' }}>
+                👁 Preview
+              </button>
+              <button className="btn btn-sm" onClick={() => shareWhatsApp('Driver', fullUrl(driverSlug, 'driver'), companyInfo?.driverPhone || '')} style={{ fontSize: '12px', background: '#25D366', color: 'white', borderColor: '#25D366' }}>
+                <MessageCircle size={12} /> Send via WhatsApp
+              </button>
+              <button className="btn btn-sm" onClick={regenerateDriverLink} style={{ fontSize: '12px' }}>
+                <RefreshCw size={12} /> Regenerate
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: '13px', color: colors.ink + '77' }}>No link generated yet. Click above to create one.</div>
+        )}
+      </div>
+
+      {/* Per-cleaner cards */}
+      <div style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.08em', color: colors.ink + '77', fontWeight: 700, margin: '20px 0 8px' }}>
+        Cleaners ({allCleaners.length})
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '12px' }}>
+        {allCleaners.map(name => {
+          const profile = (cleanerProfiles || {})[name];
+          const hasCode = !!profile?.urlCode;
+          const slug = hasCode ? getCleanerSlug(name) : '';
+          const url = slug ? fullUrl(slug, 'cleaner') : '';
+          return (
+            <div key={name} style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '12px', padding: '14px', overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: colors.headerGreen, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '14px' }}>
+                  {name.charAt(0).toUpperCase()}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: '14px' }}>{name}</div>
+                  {profile?.phone && <div style={{ fontSize: '11px', color: colors.ink + '99' }}>📞 {profile.phone}</div>}
+                </div>
+              </div>
+
+              {hasCode ? (
+                <>
+                  <div className="mono" style={{ padding: '8px 10px', background: colors.soft, borderRadius: '6px', fontSize: '11px', marginBottom: '8px', wordBreak: 'break-all', border: `1px solid ${colors.border}` }}>
+                    {url}
+                  </div>
+                  <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                    <button className="btn btn-sm" onClick={() => copyLink(url, name)} style={{ fontSize: '11px', padding: '5px 10px' }}>
+                      {copiedFor === name ? '✓' : '📋'} Copy
+                    </button>
+                    <button className="btn btn-sm" onClick={() => openPreview(url)} style={{ fontSize: '11px', padding: '5px 10px' }}>
+                      👁
+                    </button>
+                    <button className="btn btn-sm" onClick={() => shareWhatsApp(name, url, profile?.phone || '')} style={{ fontSize: '11px', padding: '5px 10px', background: '#25D366', color: 'white', borderColor: '#25D366' }}>
+                      <MessageCircle size={11} /> WhatsApp
+                    </button>
+                    <button className="btn btn-sm" onClick={() => regenerateCleanerLink(name)} style={{ fontSize: '11px', padding: '5px 10px' }} title="Create a new URL (old link stops working)">
+                      <RefreshCw size={11} />
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <button className="btn btn-primary btn-sm" onClick={() => ensureCleanerHasCode(name)} style={{ fontSize: '12px', width: '100%' }}>
+                  <Plus size={12} /> Generate Link for {name}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
