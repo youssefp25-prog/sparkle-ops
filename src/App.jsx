@@ -891,7 +891,8 @@ export default function CleaningApp() {
   const exportEarningsExcel = (period, filtered) => {
     const periodLabel = period === 'week' ? 'Last 7 days' : period === 'month' ? 'This month' : 'All time';
     const sumHeaders = ['CLEANER', 'JOBS', 'HOURS', 'CLIENTS', 'CASH (AED)', 'ONLINE (AED)', 'TOTAL (AED)'];
-    const sumRows = CLEANERS.map(name => {
+    // Use allCleaners so added cleaners (Gabby, Mylyn, etc.) appear in exports too
+    const sumRows = allCleaners.map(name => {
       const jobs = filtered.filter(b => b.cleaner === name);
       return [
         name, jobs.length,
@@ -1042,7 +1043,8 @@ export default function CleaningApp() {
 
     // === SHEET 4: By Cleaner ===
     const cleanerHeaders = ['CLEANER', 'JOBS', 'HOURS', 'CLIENTS', 'CASH (AED)', 'ONLINE (AED)', 'PAID (AED)', 'PENDING (AED)', 'TOTAL (AED)'];
-    const cleanerRows = CLEANERS.map(name => {
+    // Use allCleaners so added cleaners show up in the monthly export too
+    const cleanerRows = allCleaners.map(name => {
       const jobs = monthBookings.filter(b => b.cleaner === name);
       return [
         name, jobs.length,
@@ -1155,15 +1157,17 @@ export default function CleaningApp() {
     const paidAmt = filteredBookings.filter(b => b.paymentStatus === 'PAID').reduce((s, b) => s + (b.total || 0), 0);
     const pendingAmt = filteredBookings.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED').reduce((s, b) => s + (b.total || 0), 0);
 
-    // Top cleaners
+    // Top cleaners — use allCleaners so added cleaners' stats are counted
     const cleanerStats = {};
-    CLEANERS.forEach(c => cleanerStats[c] = { jobs: 0, hours: 0, revenue: 0 });
+    allCleaners.forEach(c => cleanerStats[c] = { jobs: 0, hours: 0, revenue: 0 });
+    // Safety: if a booking has a cleaner name that's not in the roster (e.g. deleted cleaner,
+    // casing mismatch), auto-create a stats entry so their numbers aren't silently dropped.
     filteredBookings.forEach(b => {
-      if (cleanerStats[b.cleaner]) {
-        cleanerStats[b.cleaner].jobs += 1;
-        cleanerStats[b.cleaner].hours += b.hours || 0;
-        cleanerStats[b.cleaner].revenue += b.total || 0;
-      }
+      if (!b.cleaner) return;
+      if (!cleanerStats[b.cleaner]) cleanerStats[b.cleaner] = { jobs: 0, hours: 0, revenue: 0 };
+      cleanerStats[b.cleaner].jobs += 1;
+      cleanerStats[b.cleaner].hours += b.hours || 0;
+      cleanerStats[b.cleaner].revenue += b.total || 0;
     });
     const topCleaners = Object.entries(cleanerStats).filter(([_, s]) => s.jobs > 0).sort((a, b) => b[1].revenue - a[1].revenue);
 
@@ -2951,7 +2955,11 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
   const knownWithJobs = CLEANERS.filter(c => (byCleaner[c] || []).length > 0);
   const extraWithJobs = Object.keys(byCleaner).filter(c => !CLEANERS.includes(c) && (byCleaner[c] || []).length > 0);
   const activeCleaners = [...knownWithJobs, ...extraWithJobs];
-  const displayCleaners = activeCleaners.length > 0 ? activeCleaners : CLEANERS.slice(0, 6);
+  // Empty-state fallback: when there are no bookings for the day, show ALL cleaners
+  // (including Gabby, Mylyn, etc.) — not just the first 6. This way the user can see
+  // the full roster. We also render a friendly "no bookings" message below.
+  const hasAnyBookings = activeCleaners.length > 0;
+  const displayCleaners = hasAnyBookings ? activeCleaners : CLEANERS;
   const maxJobs = Math.max(1, ...displayCleaners.map(c => (byCleaner[c] || []).length));
 
   return (
@@ -2987,6 +2995,14 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
             ))}
           </tbody>
         </table>
+        {/* Empty-state message: shown when there are no bookings for the day, so users
+            understand why the grid is empty rather than being confused by blank columns. */}
+        {!hasAnyBookings && (
+          <div style={{ padding: '30px 20px', textAlign: 'center', color: colors.ink + '77', background: '#fafafa', borderTop: `1px solid ${colors.border}` }}>
+            <div style={{ fontSize: '14px', fontWeight: 600, marginBottom: '4px' }}>No bookings for {formatDate(date)}</div>
+            <div style={{ fontSize: '12px' }}>Add bookings in the <strong>Bookings</strong> tab, then they&apos;ll appear here grouped by cleaner.</div>
+          </div>
+        )}
         <div style={{ marginTop: '16px', fontSize: '11px', color: colors.ink + '99', display: 'flex', gap: '20px' }}>
           <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: colors.cellMaterials, marginRight: '4px', verticalAlign: 'middle', border: '1px solid #ccc' }}></span> With materials</span>
           <span>O = Online · C = Cash</span>
@@ -3104,13 +3120,22 @@ function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, 
   );
 
   // Build the run: pickup events + drop-off events
-  // Group by cleaner to figure out pickup origin
+  // Group by cleaner to figure out pickup origin.
+  // CLEANERS prop here = allCleaners (passed from parent), so added cleaners (Gabby, Mylyn)
+  // get their own bucket. Safety: auto-create a bucket for any booking whose cleaner isn't
+  // in the roster — prevents routes being silently skipped.
   const cleanerBookings = {};
   CLEANERS.forEach(c => cleanerBookings[c] = []);
-  sorted.forEach(b => { if (cleanerBookings[b.cleaner]) cleanerBookings[b.cleaner].push(b); });
+  sorted.forEach(b => {
+    if (!b.cleaner) return;
+    if (!cleanerBookings[b.cleaner]) cleanerBookings[b.cleaner] = [];
+    cleanerBookings[b.cleaner].push(b);
+  });
 
   const runEvents = [];
-  CLEANERS.forEach(cleaner => {
+  // Iterate every cleaner that has at least one booking today (not just the roster)
+  const allCleanersWithJobs = Object.keys(cleanerBookings).filter(c => cleanerBookings[c].length > 0);
+  allCleanersWithJobs.forEach(cleaner => {
     const jobs = cleanerBookings[cleaner].sort((a, b) => parseStartTime(a.timing) - parseStartTime(b.timing));
     if (jobs.length === 0) return;
     jobs.forEach((job, idx) => {
