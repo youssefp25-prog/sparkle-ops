@@ -1542,7 +1542,7 @@ Thank you for choosing us!
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginBottom: '20px' }}>
         <StatCard icon={<DollarSign size={18} />} label="Revenue" value={`${totalRevenue.toFixed(0)} AED`} color={colors.accent} colors={colors} />
         <StatCard icon={<Clock size={18} />} label="Hours" value={`${totalHours.toFixed(1)}`} color={colors.gold} colors={colors} />
-        <StatCard icon={<Users size={18} />} label="Cleaners" value={`${activeCleaners}/7`} color={colors.rust} colors={colors} />
+        <StatCard icon={<Users size={18} />} label="Cleaners" value={`${activeCleaners}/${allCleaners.length}`} color={colors.rust} colors={colors} />
         <StatCard icon={<DollarSign size={18} />} label="Cash" value={`${cashTotal.toFixed(0)}`} color={colors.ink} colors={colors} />
         <StatCard icon={<DollarSign size={18} />} label="Online" value={`${onlineTotal.toFixed(0)}`} color={colors.ink} colors={colors} />
       </div>
