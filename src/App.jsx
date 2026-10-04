@@ -229,27 +229,69 @@ export default function CleaningApp() {
 
         // Cleaner profiles — same shape as cleaner_homes: one row per cleaner name,
         // keyed by name, with the profile JSON. This is what makes added cleaners
-        // (Gabby, Mylyn, etc.) visible from any laptop. Falls back silently to localStorage
-        // if the table doesn't exist yet (you need to create it in Supabase first).
+        // (Gabby, Mylyn, etc.) visible from any laptop.
+        //
+        // IMPORTANT behavior:
+        //   - If cloud HAS data → use it (replaces local, which is the authoritative state).
+        //   - If cloud is EMPTY but localStorage HAS data → this is a first-time user who
+        //     added cleaners before the sync was wired up. Push their local data UP to
+        //     the cloud as a one-time migration so other devices can see it.
+        //   - If both are empty → nothing to do.
+        // This prevents the previous bug where an empty cloud response wiped local data.
         const { data: profilesData, error: profilesErr } = await supabase.from('cleaner_profiles').select('*');
-        if (!profilesErr && profilesData) {
-          const profiles = {};
-          profilesData.forEach(p => {
-            profiles[p.cleaner] = {
-              phone: p.phone || '',
-              status: p.status || 'Available',
-              workingDays: p.working_days || [true, true, true, true, true, true, true],
-              hoursStart: p.hours_start || '0:00',
-              hoursEnd: p.hours_end || '24:00',
-              skills: p.skills || '',
-              areas: p.areas || '',
-              ratePerHour: Number(p.rate_per_hour) || 20,
-              salaryPerMonth: Number(p.salary_per_month) || 1800,
-              role: p.role || 'Cleaner',
-            };
-          });
-          setCleanerProfiles(profiles);
-          try { localStorage.setItem('sparkle_cleaner_profiles', JSON.stringify(profiles)); } catch (e) {}
+        if (!profilesErr) {
+          if (profilesData && profilesData.length > 0) {
+            // Cloud has data — hydrate from cloud
+            const profiles = {};
+            profilesData.forEach(p => {
+              profiles[p.cleaner] = {
+                phone: p.phone || '',
+                status: p.status || 'Available',
+                workingDays: p.working_days || [true, true, true, true, true, true, true],
+                hoursStart: p.hours_start || '0:00',
+                hoursEnd: p.hours_end || '24:00',
+                skills: p.skills || '',
+                areas: p.areas || '',
+                ratePerHour: Number(p.rate_per_hour) || 20,
+                salaryPerMonth: Number(p.salary_per_month) || 1800,
+                role: p.role || 'Cleaner',
+              };
+            });
+            setCleanerProfiles(profiles);
+            try { localStorage.setItem('sparkle_cleaner_profiles', JSON.stringify(profiles)); } catch (e) {}
+          } else {
+            // Cloud is empty — one-time migration: push local profiles up to the cloud
+            try {
+              const localRaw = localStorage.getItem('sparkle_cleaner_profiles');
+              if (localRaw) {
+                const localProfiles = JSON.parse(localRaw);
+                const names = Object.keys(localProfiles || {});
+                if (names.length > 0) {
+                  const migrationRows = names.map(cleaner => {
+                    const p = localProfiles[cleaner] || {};
+                    return {
+                      cleaner,
+                      phone: p.phone || '',
+                      status: p.status || 'Available',
+                      working_days: p.workingDays || [true, true, true, true, true, true, true],
+                      hours_start: p.hoursStart || '0:00',
+                      hours_end: p.hoursEnd || '24:00',
+                      skills: p.skills || '',
+                      areas: p.areas || '',
+                      rate_per_hour: Number(p.ratePerHour) || 20,
+                      salary_per_month: Number(p.salaryPerMonth) || 1800,
+                      role: p.role || 'Cleaner',
+                      updated_at: new Date().toISOString(),
+                    };
+                  });
+                  await supabase.from('cleaner_profiles').upsert(migrationRows);
+                  console.log(`Migrated ${names.length} cleaner profiles from local to cloud`);
+                }
+              }
+            } catch (migrateErr) {
+              console.error('Cleaner profile migration failed:', migrateErr);
+            }
+          }
         }
 
         setCloudStatus('synced');
