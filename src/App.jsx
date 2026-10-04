@@ -227,6 +227,31 @@ export default function CleaningApp() {
           try { localStorage.setItem('sparkle_expenses', JSON.stringify(es)); } catch (e) {}
         }
 
+        // Cleaner profiles — same shape as cleaner_homes: one row per cleaner name,
+        // keyed by name, with the profile JSON. This is what makes added cleaners
+        // (Gabby, Mylyn, etc.) visible from any laptop. Falls back silently to localStorage
+        // if the table doesn't exist yet (you need to create it in Supabase first).
+        const { data: profilesData, error: profilesErr } = await supabase.from('cleaner_profiles').select('*');
+        if (!profilesErr && profilesData) {
+          const profiles = {};
+          profilesData.forEach(p => {
+            profiles[p.cleaner] = {
+              phone: p.phone || '',
+              status: p.status || 'Available',
+              workingDays: p.working_days || [true, true, true, true, true, true, true],
+              hoursStart: p.hours_start || '0:00',
+              hoursEnd: p.hours_end || '24:00',
+              skills: p.skills || '',
+              areas: p.areas || '',
+              ratePerHour: Number(p.rate_per_hour) || 20,
+              salaryPerMonth: Number(p.salary_per_month) || 1800,
+              role: p.role || 'Cleaner',
+            };
+          });
+          setCleanerProfiles(profiles);
+          try { localStorage.setItem('sparkle_cleaner_profiles', JSON.stringify(profiles)); } catch (e) {}
+        }
+
         setCloudStatus('synced');
         setLastSync(new Date());
       } catch (e) {
@@ -442,10 +467,49 @@ export default function CleaningApp() {
     try { localStorage.setItem('sparkle_client_credits', JSON.stringify(next)); } catch (e) {}
   };
 
-  // Cleaner profiles (contact info, working hours/days, skills) — localStorage only
-  const saveCleanerProfiles = (next) => {
+  // Cleaner profiles (contact info, working hours/days, skills).
+  // Syncs to Supabase `cleaner_profiles` table so added cleaners (Gabby, Mylyn, etc.)
+  // are visible from every laptop/device. Falls back silently to localStorage if the
+  // table doesn't exist or the network is down — the UI never breaks.
+  const saveCleanerProfiles = async (next) => {
     setCleanerProfiles(next);
     try { localStorage.setItem('sparkle_cleaner_profiles', JSON.stringify(next)); } catch (e) {}
+    setCloudStatus('syncing');
+    try {
+      // 1) Delete any rows for cleaners that have been removed locally
+      const { data: cloudProfiles } = await supabase.from('cleaner_profiles').select('cleaner');
+      if (cloudProfiles) {
+        const localNames = new Set(Object.keys(next));
+        const toDelete = cloudProfiles.filter(p => !localNames.has(p.cleaner)).map(p => p.cleaner);
+        if (toDelete.length > 0) {
+          await supabase.from('cleaner_profiles').delete().in('cleaner', toDelete);
+        }
+      }
+      // 2) Upsert current profiles — maps camelCase JS fields to snake_case DB columns
+      const rows = Object.entries(next).map(([cleaner, p]) => ({
+        cleaner,
+        phone: p.phone || '',
+        status: p.status || 'Available',
+        working_days: p.workingDays || [true, true, true, true, true, true, true],
+        hours_start: p.hoursStart || '0:00',
+        hours_end: p.hoursEnd || '24:00',
+        skills: p.skills || '',
+        areas: p.areas || '',
+        rate_per_hour: Number(p.ratePerHour) || 20,
+        salary_per_month: Number(p.salaryPerMonth) || 1800,
+        role: p.role || 'Cleaner',
+        updated_at: new Date().toISOString(),
+      }));
+      if (rows.length > 0) {
+        const { error } = await supabase.from('cleaner_profiles').upsert(rows);
+        if (error) throw error;
+      }
+      setCloudStatus('synced');
+      setLastSync(new Date());
+    } catch (e) {
+      setCloudStatus('offline');
+      console.error('Cloud sync error (cleaner_profiles):', e);
+    }
   };
 
   const generateFromContracts = () => {
