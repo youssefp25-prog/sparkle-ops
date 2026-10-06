@@ -6808,32 +6808,78 @@ function DriverSchedulePage({ slug, savedDays, bookings, date, companyInfo, clea
       byCleaner[b.cleaner].push(b);
     });
 
+    // Parse end time of a timing string like "8-10" or "14:30-16:30" (returns hours as number)
+    const parseEnd = (t) => {
+      if (!t) return 999;
+      const m = String(t).replace(/\s/g, '').match(/-(\d+)(?::(\d+))?/);
+      if (!m) return 999;
+      let h = parseInt(m[1]) + parseInt(m[2] || 0) / 60;
+      const s = parseStart(t);
+      // If end hour looks earlier than start (e.g. "11-1"), assume PM wrap
+      if (h < s) h += 12;
+      return h;
+    };
+    // Format a numeric time (e.g. 14.5) back into display string "14:30"
+    const formatTime = (hoursNum) => {
+      if (hoursNum >= 999) return '—';
+      const h = Math.floor(hoursNum);
+      const m = Math.round((hoursNum - h) * 60);
+      return `${h}:${String(m).padStart(2, '0')}`;
+    };
+
     const list = [];
     Object.entries(byCleaner).forEach(([cleaner, jobs]) => {
       const sorted = jobs.sort((a, b) => parseStart(a.timing) - parseStart(b.timing));
       sorted.forEach((job, idx) => {
+        const jobStartNum = parseStart(job.timing);
+        const jobStartStr = job.timing ? job.timing.split('-')[0].trim() : '';
+
         if (idx === 0) {
-          // Pickup from home or office
+          // ===== FIRST JOB OF THE DAY =====
+          // Pickup from cleaner's home OR from office (based on booking's pickupType)
           const useHome = job.pickupType === 'HOME';
           const home = (cleanerHomes || {})[cleaner];
           list.push({
             id: `${job.id}-pickup`,
             type: 'pickup',
             cleaner,
-            time: job.timing ? job.timing.split('-')[0].trim() : '',
+            timeNum: jobStartNum - 0.001, // just before drop, same display time
+            time: jobStartStr,
+            sortOrder: 0, // pickup comes before drop at same time
             label: useHome ? `Pickup ${cleaner} at home` : `Pickup ${cleaner} at office`,
-            address: useHome ? (home?.address || `${cleaner}'s home (not set)`) : (officeAddress?.address || 'Office'),
+            address: useHome ? (home?.address || `${cleaner}'s home address (not set)`) : (officeAddress?.address || 'Office'),
             lat: useHome ? home?.lat : officeAddress?.lat,
             lng: useHome ? home?.lng : officeAddress?.lng,
             relatedJob: job,
           });
+        } else {
+          // ===== SUBSEQUENT JOB =====
+          // Collect cleaner from the PREVIOUS job's location at end of that job
+          const prev = sorted[idx - 1];
+          const prevEndNum = parseEnd(prev.timing);
+          list.push({
+            id: `${job.id}-collect`,
+            type: 'collect',
+            cleaner,
+            timeNum: prevEndNum,
+            time: formatTime(prevEndNum),
+            sortOrder: 0, // collect comes before next drop at same time
+            label: `Collect ${cleaner} from ${prev.clientName || 'previous location'}`,
+            address: prev.location,
+            lat: prev.lat,
+            lng: prev.lng,
+            relatedJob: prev,
+          });
         }
-        // Drop off at the job
+
+        // Drop off at this job's location
         list.push({
           id: `${job.id}-drop`,
           type: 'drop',
           cleaner,
-          time: job.timing ? job.timing.split('-')[0].trim() : '',
+          timeNum: jobStartNum,
+          time: jobStartStr,
+          sortOrder: 1, // drop comes after pickup/collect
           label: `Drop ${cleaner} at ${job.clientName || 'client'}`,
           address: job.location,
           lat: job.lat,
@@ -6843,7 +6889,11 @@ function DriverSchedulePage({ slug, savedDays, bookings, date, companyInfo, clea
       });
     });
 
-    return list.sort((a, b) => parseStart(a.time + '-00') - parseStart(b.time + '-00'));
+    // Sort by numeric time, then by sortOrder so pickup/collect come before drop at same time
+    return list.sort((a, b) => {
+      if (a.timeNum !== b.timeNum) return a.timeNum - b.timeNum;
+      return a.sortOrder - b.sortOrder;
+    });
   }, [dayBookings, cleanerHomes, officeAddress]);
 
   const openWaze = (address, lat, lng) => {
@@ -6881,18 +6931,22 @@ function DriverSchedulePage({ slug, savedDays, bookings, date, companyInfo, clea
           </h1>
           <div style={{ fontSize: '14px', opacity: 0.85 }}>{dateLabel}</div>
 
-          <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
-            <div style={{ flex: 1, background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
-              <div style={{ fontSize: '11px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Trips</div>
-              <div className="display-font" style={{ fontSize: '22px', fontWeight: 800, marginTop: '2px' }}>{stops.length}</div>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '14px', flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 60px', background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '10px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total</div>
+              <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, marginTop: '2px' }}>{stops.length}</div>
             </div>
-            <div style={{ flex: 1, background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
-              <div style={{ fontSize: '11px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pickups</div>
-              <div className="display-font" style={{ fontSize: '22px', fontWeight: 800, marginTop: '2px' }}>{stops.filter(s => s.type === 'pickup').length}</div>
+            <div style={{ flex: '1 1 60px', background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '10px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>🧍 Pickups</div>
+              <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, marginTop: '2px' }}>{stops.filter(s => s.type === 'pickup').length}</div>
             </div>
-            <div style={{ flex: 1, background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
-              <div style={{ fontSize: '11px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Drops</div>
-              <div className="display-font" style={{ fontSize: '22px', fontWeight: 800, marginTop: '2px' }}>{stops.filter(s => s.type === 'drop').length}</div>
+            <div style={{ flex: '1 1 60px', background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '10px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>🔄 Collects</div>
+              <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, marginTop: '2px' }}>{stops.filter(s => s.type === 'collect').length}</div>
+            </div>
+            <div style={{ flex: '1 1 60px', background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '10px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>📍 Drops</div>
+              <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, marginTop: '2px' }}>{stops.filter(s => s.type === 'drop').length}</div>
             </div>
           </div>
         </div>
@@ -6923,12 +6977,20 @@ function DriverSchedulePage({ slug, savedDays, bookings, date, companyInfo, clea
           </div>
         )}
         {stops.map((stop, idx) => {
-          const isPickup = stop.type === 'pickup';
+          // Three distinct stop types with their own visual style:
+          //   pickup  = first pickup of the day from home or office (gold)
+          //   collect = collecting cleaner from their previous job location (orange)
+          //   drop    = dropping cleaner at their next job (green/accent)
+          const typeConfig = stop.type === 'pickup'
+            ? { label: '🧍 Pickup', bg: staffStyles.gold, color: staffStyles.text }
+            : stop.type === 'collect'
+            ? { label: '🔄 Collect', bg: '#D97706', color: 'white' } // orange
+            : { label: '📍 Drop', bg: staffStyles.accent, color: 'white' };
           return (
             <div key={stop.id || idx} style={{ background: staffStyles.cardBg, borderRadius: '12px', border: `1.5px solid ${staffStyles.border}`, padding: '12px 14px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '6px' }}>
-                <div style={{ fontSize: '12px', padding: '3px 10px', borderRadius: '99px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', background: isPickup ? staffStyles.gold : staffStyles.accent, color: isPickup ? staffStyles.text : 'white' }}>
-                  {isPickup ? '🧍 Pickup' : '📍 Drop'}
+                <div style={{ fontSize: '12px', padding: '3px 10px', borderRadius: '99px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', background: typeConfig.bg, color: typeConfig.color }}>
+                  {typeConfig.label}
                 </div>
                 <div style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'monospace', color: staffStyles.textMuted }}>
                   {stop.time || '—'}
