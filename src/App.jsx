@@ -6529,6 +6529,19 @@ function SummaryBox({ label, value, colors, highlight, warning }) {
 // Helper: slug a cleaner name for URLs (e.g. "Leah" → "leah", "Al Mas" → "al-mas")
 const slugifyName = (name) => (name || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
+// Haversine distance between two GPS points, in kilometers (straight-line).
+// Not perfectly accurate for driving but good enough to spot inefficient routes
+// and flag long legs. Zero if either coord is missing.
+const haversineKm = (lat1, lng1, lat2, lng2) => {
+  if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) return 0;
+  const R = 6371; // earth radius km
+  const toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
 // Helper: parse "leah-7k2m" into {name: "leah", code: "7k2m"}
 const parseStaffSlug = (slug) => {
   if (!slug) return { name: '', code: '' };
@@ -6896,6 +6909,18 @@ function DriverSchedulePage({ slug, savedDays, bookings, date, companyInfo, clea
     });
   }, [dayBookings, cleanerHomes, officeAddress]);
 
+  // Total approximate driving distance (sum of straight-line hops between consecutive stops).
+  // Shown in the header so the driver sees how long the day will roughly be.
+  const totalKm = React.useMemo(() => {
+    let total = 0;
+    for (let i = 1; i < stops.length; i++) {
+      const a = stops[i - 1];
+      const b = stops[i];
+      total += haversineKm(a.lat, a.lng, b.lat, b.lng);
+    }
+    return total;
+  }, [stops]);
+
   const openWaze = (address, lat, lng) => {
     const url = lat && lng
       ? `https://www.waze.com/ul?ll=${lat}%2C${lng}&navigate=yes`
@@ -6935,6 +6960,10 @@ function DriverSchedulePage({ slug, savedDays, bookings, date, companyInfo, clea
             <div style={{ flex: '1 1 60px', background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
               <div style={{ fontSize: '10px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total</div>
               <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, marginTop: '2px' }}>{stops.length}</div>
+            </div>
+            <div style={{ flex: '1 1 60px', background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '10px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Distance</div>
+              <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, marginTop: '2px' }}>≈{totalKm.toFixed(0)}<span style={{ fontSize: '12px', opacity: 0.8 }}> km</span></div>
             </div>
             <div style={{ flex: '1 1 60px', background: 'rgba(255,255,255,0.15)', padding: '10px 12px', borderRadius: '10px' }}>
               <div style={{ fontSize: '10px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>🧍 Pickups</div>
@@ -6982,35 +7011,103 @@ function DriverSchedulePage({ slug, savedDays, bookings, date, companyInfo, clea
           //   collect = collecting cleaner from their previous job location (orange)
           //   drop    = dropping cleaner at their next job (green/accent)
           const typeConfig = stop.type === 'pickup'
-            ? { label: '🧍 Pickup', bg: staffStyles.gold, color: staffStyles.text }
+            ? { emoji: '🧍', label: 'PICKUP', bg: staffStyles.gold, color: staffStyles.text, cardBorder: staffStyles.gold }
             : stop.type === 'collect'
-            ? { label: '🔄 Collect', bg: '#D97706', color: 'white' } // orange
-            : { label: '📍 Drop', bg: staffStyles.accent, color: 'white' };
+            ? { emoji: '🔄', label: 'COLLECT', bg: '#D97706', color: 'white', cardBorder: '#D97706' } // orange
+            : { emoji: '📍', label: 'DROP', bg: staffStyles.accent, color: 'white', cardBorder: staffStyles.accent };
+
+          // Distance from previous stop (haversine, straight-line km)
+          const prevStop = idx > 0 ? stops[idx - 1] : null;
+          const distanceKm = (prevStop && prevStop.lat && prevStop.lng && stop.lat && stop.lng)
+            ? haversineKm(prevStop.lat, prevStop.lng, stop.lat, stop.lng)
+            : null;
+
+          // Build "who" (cleaner name — big) and "where" (location/client — big)
+          // For pickup: "Zainab" from "Office"
+          // For collect: "Zainab" from "Sudhi Dental"
+          // For drop: "Zainab" to "Sudhi Dental" (next client)
+          const whoName = stop.cleaner || '—';
+          const whereName = stop.type === 'drop'
+            ? (stop.relatedJob?.clientName || stop.address || '—')
+            : stop.type === 'pickup'
+            ? (stop.relatedJob?.pickupType === 'HOME' ? 'HOME' : 'OFFICE')
+            : (stop.relatedJob?.clientName || stop.address || 'previous location');
+          const prepWord = stop.type === 'drop' ? 'to' : 'from';
+
           return (
-            <div key={stop.id || idx} style={{ background: staffStyles.cardBg, borderRadius: '12px', border: `1.5px solid ${staffStyles.border}`, padding: '12px 14px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '6px' }}>
-                <div style={{ fontSize: '12px', padding: '3px 10px', borderRadius: '99px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', background: typeConfig.bg, color: typeConfig.color }}>
-                  {typeConfig.label}
+            <React.Fragment key={stop.id || idx}>
+              {/* Distance badge between cards (not shown before the very first stop) */}
+              {idx > 0 && distanceKm !== null && (
+                <div style={{ textAlign: 'center', fontSize: '12px', color: staffStyles.textMuted, padding: '4px 0', fontWeight: 600 }}>
+                  ↓ <span style={{ color: distanceKm > 10 ? staffStyles.danger : staffStyles.textMuted }}>{distanceKm.toFixed(1)} km</span>
+                  {distanceKm > 10 && <span style={{ fontSize: '10px', marginLeft: '6px', background: staffStyles.danger, color: 'white', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>LONG</span>}
                 </div>
-                <div style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'monospace', color: staffStyles.textMuted }}>
-                  {stop.time || '—'}
+              )}
+
+              <div style={{ background: staffStyles.cardBg, borderRadius: '14px', border: `2px solid ${typeConfig.cardBorder}`, overflow: 'hidden' }}>
+                {/* Big colored header strip with time */}
+                <div style={{ background: typeConfig.bg, color: typeConfig.color, padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontSize: '14px', fontWeight: 800, letterSpacing: '0.05em' }}>
+                    <span style={{ fontSize: '18px' }}>{typeConfig.emoji}</span> {typeConfig.label}
+                  </div>
+                  <div style={{ fontSize: '18px', fontWeight: 800, fontFamily: 'monospace' }}>
+                    {stop.time || '—'}
+                  </div>
+                </div>
+
+                {/* Body: who + where in BIG text (easy to read) */}
+                <div style={{ padding: '16px' }}>
+                  <div style={{ fontSize: '22px', fontWeight: 800, color: staffStyles.text, lineHeight: 1.2, marginBottom: '6px', textTransform: 'uppercase' }}>
+                    {whoName}
+                  </div>
+                  <div style={{ fontSize: '14px', color: staffStyles.textMuted, marginBottom: '4px' }}>
+                    {prepWord}
+                  </div>
+                  <div style={{ fontSize: '20px', fontWeight: 800, color: staffStyles.text, lineHeight: 1.2, marginBottom: '10px', textTransform: 'uppercase' }}>
+                    {whereName}
+                  </div>
+                  {stop.address && (
+                    <div style={{ fontSize: '12px', color: staffStyles.textMuted, marginBottom: '14px', lineHeight: 1.4, fontStyle: 'italic' }}>
+                      {stop.address}
+                    </div>
+                  )}
+
+                  {/* BIG primary location button */}
+                  <button
+                    onClick={() => openGoogleMaps(stop.address, stop.lat, stop.lng)}
+                    style={{
+                      width: '100%',
+                      padding: '18px',
+                      background: typeConfig.bg,
+                      color: typeConfig.color,
+                      border: 'none',
+                      borderRadius: '12px',
+                      fontSize: '18px',
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      marginBottom: '8px',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+                    }}
+                  >
+                    📍 OPEN LOCATION
+                  </button>
+
+                  {/* Secondary row: Waze + Google Maps side by side */}
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => openWaze(stop.address, stop.lat, stop.lng)} style={{ flex: 1, padding: '12px', background: '#33CCFF', color: 'white', border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: 700, cursor: 'pointer' }}>
+                      🟢 Waze
+                    </button>
+                    <button onClick={() => openGoogleMaps(stop.address, stop.lat, stop.lng)} style={{ flex: 1, padding: '12px', background: '#4285F4', color: 'white', border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: 700, cursor: 'pointer' }}>
+                      🔵 Maps
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div style={{ fontSize: '15px', fontWeight: 700, marginBottom: '2px' }}>
-                {stop.label}
-              </div>
-              <div style={{ fontSize: '12px', color: staffStyles.textMuted, marginBottom: '10px', lineHeight: 1.4 }}>
-                {stop.address || '—'}
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={() => openWaze(stop.address, stop.lat, stop.lng)} style={{ flex: 1, padding: '10px', background: '#33CCFF', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
-                  🟢 Waze
-                </button>
-                <button onClick={() => openGoogleMaps(stop.address, stop.lat, stop.lng)} style={{ flex: 1, padding: '10px', background: '#4285F4', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
-                  🔵 Maps
-                </button>
-              </div>
-            </div>
+            </React.Fragment>
           );
         })}
       </div>
