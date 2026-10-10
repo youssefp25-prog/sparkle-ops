@@ -70,26 +70,10 @@ const emptyClient = () => ({
 
 const emptyContract = () => ({
   id: 'k_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-  clientId: null, clientName: '',
-  // Multi-cleaner: `cleaners` is an array (new field). Old `cleaner` single field
-  // is kept in sync for backward compat with every screen that still reads it.
-  cleaner: 'Leah',
-  cleaners: ['Leah'],
-  daysOfWeek: [], timing: '',
+  clientId: null, clientName: '', cleaner: 'Leah', daysOfWeek: [], timing: '',
   pricePerHour: 25, withMaterials: false, paymentType: 'ONLINE', active: true,
   startDate: new Date().toISOString().split('T')[0]
 });
-
-// Normalize any contract so `cleaners` is always an array of 1+ names.
-// Older contracts only have the string `cleaner`; auto-upgrade on read.
-const normalizeContract = (c) => {
-  if (!c) return c;
-  if (Array.isArray(c.cleaners) && c.cleaners.length > 0) {
-    return { ...c, cleaner: c.cleaner || c.cleaners[0] };
-  }
-  const name = c.cleaner || 'Leah';
-  return { ...c, cleaner: name, cleaners: [name] };
-};
 
 export default function CleaningApp() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -98,6 +82,16 @@ export default function CleaningApp() {
   const [savedDays, setSavedDays] = useState({});
   const [clients, setClients] = useState([]);
   const [contracts, setContracts] = useState([]);
+  // Smart Day Builder: scheduledBookings = pre-booked future appointments
+  // Each one: { id, clientId, clientName, phone, location, lat, lng, date, timing, cleaner,
+  //            pricePerHour, pickupType, withMaterials, paymentType, notes, reminderPref,
+  //            reminderSent, autoAdded, status: 'pending'|'added'|'cancelled' }
+  const [scheduledBookings, setScheduledBookings] = useState([]);
+  // Tracks dates we've already auto-run contracts/scheduled for, so we don't duplicate.
+  // Shape: Set of 'YYYY-MM-DD' strings. In-memory only (resets on refresh — safe).
+  const [autoRunDates] = useState(() => new Set());
+  // Smart Day Builder panel open/closed (per-day — resets on date change)
+  const [smartBuilderDismissed, setSmartBuilderDismissed] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [clientPickerFor, setClientPickerFor] = useState(null);
   const [bookingPinFor, setBookingPinFor] = useState(null);
@@ -168,10 +162,10 @@ export default function CleaningApp() {
         const clientsRaw = localStorage.getItem('sparkle_clients');
         if (clientsRaw) setClients(JSON.parse(clientsRaw));
         const contractsRaw = localStorage.getItem('sparkle_contracts');
-        if (contractsRaw) {
-          const parsed = JSON.parse(contractsRaw);
-          setContracts(Array.isArray(parsed) ? parsed.map(normalizeContract) : []);
-        }
+        if (contractsRaw) setContracts(JSON.parse(contractsRaw));
+        // Smart Day Builder: load scheduled (future) bookings from localStorage
+        const scheduledRaw = localStorage.getItem('sparkle_scheduled_bookings');
+        if (scheduledRaw) setScheduledBookings(JSON.parse(scheduledRaw));
         const homesRaw = localStorage.getItem('sparkle_cleaner_homes');
         if (homesRaw) setCleanerHomes(JSON.parse(homesRaw));
         const officeRaw = localStorage.getItem('sparkle_office');
@@ -218,11 +212,8 @@ export default function CleaningApp() {
         // Contracts
         const { data: contractsData, error: contractsErr } = await supabase.from('contracts').select('*');
         if (!contractsErr && contractsData) {
-          // Multi-cleaner: `cleaners` column may not yet exist in Supabase.
-          // If present, use it; otherwise normalizeContract builds it from `cleaner`.
-          const cs = contractsData.map(c => normalizeContract({
+          const cs = contractsData.map(c => ({
             id: c.id, clientId: c.client_id, clientName: c.client_name, cleaner: c.cleaner,
-            cleaners: Array.isArray(c.cleaners) ? c.cleaners : undefined,
             daysOfWeek: c.days_of_week || [], timing: c.timing || '',
             pricePerHour: c.price_per_hour || 25, withMaterials: c.with_materials || false,
             paymentType: c.payment_type || 'ONLINE', active: c.active !== false,
@@ -231,6 +222,27 @@ export default function CleaningApp() {
           setContracts(cs);
           try { localStorage.setItem('sparkle_contracts', JSON.stringify(cs)); } catch (e) {}
         }
+
+        // Smart Day Builder: load scheduled (future) bookings from Supabase.
+        // Table may not exist yet — the error is caught silently so the app still works
+        // on localStorage until the user runs the SQL to create the table.
+        try {
+          const { data: schedData, error: schedErr } = await supabase.from('scheduled_bookings').select('*');
+          if (!schedErr && schedData) {
+            const sb = schedData.map(s => ({
+              id: s.id, clientId: s.client_id, clientName: s.client_name,
+              phone: s.phone || '', location: s.location || '', lat: s.lat, lng: s.lng,
+              date: s.date, timing: s.timing || '', cleaner: s.cleaner || '',
+              pricePerHour: s.price_per_hour || 25, pickupType: s.pickup_type || 'OFFICE',
+              withMaterials: s.with_materials || false, paymentType: s.payment_type || 'ONLINE',
+              notes: s.notes || '', reminderPref: s.reminder_pref !== false,
+              reminderSent: s.reminder_sent || false, autoAdded: s.auto_added || false,
+              status: s.status || 'pending',
+            }));
+            setScheduledBookings(sb);
+            try { localStorage.setItem('sparkle_scheduled_bookings', JSON.stringify(sb)); } catch (e) {}
+          }
+        } catch (e) { /* table doesn't exist yet, fall back to localStorage */ }
 
         // Cleaner homes
         const { data: homesData, error: homesErr } = await supabase.from('cleaner_homes').select('*');
@@ -438,14 +450,7 @@ export default function CleaningApp() {
       }
       if (next.length > 0) {
         const rows = next.map(c => ({
-          id: c.id, client_id: c.clientId, client_name: c.clientName,
-          // Save BOTH: `cleaner` (string, primary) for backward compat with existing Supabase schema,
-          // and `cleaners` (JSON array) for the multi-cleaner feature.
-          // If the `contracts` table doesn't yet have a `cleaners` column, Supabase ignores that key.
-          // To make team contracts sync across devices, run once in Supabase SQL Editor:
-          //   ALTER TABLE contracts ADD COLUMN IF NOT EXISTS cleaners jsonb;
-          cleaner: c.cleaner,
-          cleaners: Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [c.cleaner].filter(Boolean),
+          id: c.id, client_id: c.clientId, client_name: c.clientName, cleaner: c.cleaner,
           days_of_week: c.daysOfWeek || [], timing: c.timing || '',
           price_per_hour: c.pricePerHour || 25, with_materials: c.withMaterials || false,
           payment_type: c.paymentType || 'ONLINE', active: c.active !== false,
@@ -459,6 +464,53 @@ export default function CleaningApp() {
     } catch (e) {
       setCloudStatus('offline');
       console.error('Cloud sync error (contracts):', e);
+    }
+  };
+
+  // Smart Day Builder: persist scheduled (future) bookings — localStorage + Supabase.
+  // Falls back silently to localStorage if the `scheduled_bookings` table doesn't exist.
+  // To enable cloud sync across devices, run once in Supabase SQL Editor:
+  //   CREATE TABLE IF NOT EXISTS scheduled_bookings (
+  //     id TEXT PRIMARY KEY, client_id TEXT, client_name TEXT, phone TEXT,
+  //     location TEXT, lat NUMERIC, lng NUMERIC, date DATE, timing TEXT,
+  //     cleaner TEXT, price_per_hour NUMERIC, pickup_type TEXT,
+  //     with_materials BOOLEAN, payment_type TEXT, notes TEXT,
+  //     reminder_pref BOOLEAN DEFAULT true, reminder_sent BOOLEAN DEFAULT false,
+  //     auto_added BOOLEAN DEFAULT false, status TEXT DEFAULT 'pending'
+  //   );
+  const saveScheduledBookings = async (next) => {
+    setScheduledBookings(next);
+    try { localStorage.setItem('sparkle_scheduled_bookings', JSON.stringify(next)); } catch (e) {}
+    try {
+      setCloudStatus('syncing');
+      // Figure out what to delete from cloud (anything cloud has that local doesn't)
+      const { data: cloudSched } = await supabase.from('scheduled_bookings').select('id');
+      if (cloudSched !== null) {
+        const cloudIds = new Set((cloudSched || []).map(s => s.id));
+        const localIds = new Set(next.map(s => s.id));
+        const toDelete = [...cloudIds].filter(id => !localIds.has(id));
+        if (toDelete.length > 0) {
+          await supabase.from('scheduled_bookings').delete().in('id', toDelete);
+        }
+        if (next.length > 0) {
+          const rows = next.map(s => ({
+            id: s.id, client_id: s.clientId || null, client_name: s.clientName || '',
+            phone: s.phone || '', location: s.location || '', lat: s.lat || null, lng: s.lng || null,
+            date: s.date, timing: s.timing || '', cleaner: s.cleaner || '',
+            price_per_hour: Number(s.pricePerHour) || 25, pickup_type: s.pickupType || 'OFFICE',
+            with_materials: !!s.withMaterials, payment_type: s.paymentType || 'ONLINE',
+            notes: s.notes || '', reminder_pref: s.reminderPref !== false,
+            reminder_sent: !!s.reminderSent, auto_added: !!s.autoAdded,
+            status: s.status || 'pending',
+          }));
+          await supabase.from('scheduled_bookings').upsert(rows);
+        }
+        setCloudStatus('synced');
+        setLastSync(new Date());
+      }
+    } catch (e) {
+      // Table likely doesn't exist yet — localStorage still has the data, nothing to show
+      console.warn('scheduled_bookings cloud sync skipped (table may not exist):', e?.message || e);
     }
   };
 
@@ -608,40 +660,244 @@ export default function CleaningApp() {
     const dayOfWeek = new Date(date).getDay();
     const matching = contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek));
     if (matching.length === 0) { showStatus('No contracts for this day'); return; }
-    // Multi-cleaner: a contract may have 2+ cleaners (team contracts). Generate ONE
-    // booking per (clientId + cleaner) so each cleaner has her own row for payroll /
-    // deployment / earnings. Dedupe key is also (clientId + cleaner) so re-running
-    // Auto-fill is safe — never creates duplicates.
-    const existingPairs = new Set(
-      bookings.filter(b => b.clientId && b.cleaner).map(b => `${b.clientId}::${b.cleaner}`)
-    );
-    const newBookings = [];
-    matching.forEach(c => {
+    const existingClientIds = new Set(bookings.map(b => b.clientId).filter(Boolean));
+    const newBookings = matching.filter(c => !existingClientIds.has(c.clientId)).map(c => {
       const client = clients.find(cl => cl.id === c.clientId);
-      const cleaners = Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [c.cleaner];
-      cleaners.forEach(cleanerName => {
-        const key = `${c.clientId}::${cleanerName}`;
-        if (existingPairs.has(key)) return;
-        existingPairs.add(key);
-        newBookings.push({
-          ...emptyBooking(),
-          cleaner: cleanerName,
-          timing: c.timing,
-          clientId: c.clientId,
-          clientName: c.clientName,
-          location: client?.address || '',
-          phone: client?.phone || '',
-          pricePerHour: c.pricePerHour,
-          withMaterials: c.withMaterials,
-          paymentType: c.paymentType,
-        });
-      });
+      return {
+        ...emptyBooking(), cleaner: c.cleaner, timing: c.timing, clientId: c.clientId,
+        clientName: c.clientName, location: client?.address || '', phone: client?.phone || '',
+        pricePerHour: c.pricePerHour, withMaterials: c.withMaterials, paymentType: c.paymentType,
+      };
     });
     if (newBookings.length === 0) { showStatus('Already added'); return; }
     const cleanedExisting = bookings.filter(b => b.clientName || b.location);
     setBookings([...cleanedExisting, ...newBookings]);
     showStatus(`✓ Added ${newBookings.length} contract booking${newBookings.length > 1 ? 's' : ''}`);
   };
+
+  // ============================================================================
+  // ===== SMART DAY BUILDER — PATTERN DETECTION & AUTO-RUN LOGIC =============
+  // ============================================================================
+
+  // Collect ALL historical bookings (today's bookings + all savedDays).
+  // Returns a flat array of { clientId, clientName, date (Date), timing, cleaner, pricePerHour, ... }
+  const allHistoricalBookings = React.useMemo(() => {
+    const out = [];
+    Object.entries(savedDays || {}).forEach(([d, dayData]) => {
+      (dayData.bookings || []).forEach(b => {
+        if (!b.clientName && !b.clientId) return;
+        out.push({ ...b, date: d });
+      });
+    });
+    // Also include today's unsaved bookings so pattern uses the latest info
+    bookings.forEach(b => {
+      if (!b.clientName && !b.clientId) return;
+      // Don't double-count if date is in savedDays
+      if (!(savedDays || {})[date]) out.push({ ...b, date });
+    });
+    return out;
+  }, [savedDays, bookings, date]);
+
+  // Classify a single client's cadence from past bookings.
+  // Returns: { cadence, visits, avgGap, topWeekday, topWeekdayPct, lastVisit, suggestedTime, suggestedCleaner }
+  const classifyClient = (clientVisits) => {
+    if (!clientVisits || clientVisits.length === 0) return null;
+    const sorted = [...clientVisits].sort((a, b) => a.date.localeCompare(b.date));
+    const n = sorted.length;
+    const dates = sorted.map(v => new Date(v.date + 'T12:00:00'));
+    // Gaps between visits in days
+    const gaps = [];
+    for (let i = 1; i < dates.length; i++) {
+      gaps.push(Math.round((dates[i] - dates[i-1]) / 86400000));
+    }
+    const avgGap = gaps.length > 0 ? gaps.reduce((s, g) => s + g, 0) / gaps.length : null;
+    // Preferred weekday
+    const wdCounts = {};
+    sorted.forEach(v => {
+      const wd = new Date(v.date + 'T12:00:00').getDay();
+      wdCounts[wd] = (wdCounts[wd] || 0) + 1;
+    });
+    const topWeekday = Object.entries(wdCounts).sort((a, b) => b[1] - a[1])[0];
+    const topWd = topWeekday ? Number(topWeekday[0]) : null;
+    const topWdPct = topWeekday ? (topWeekday[1] / n * 100) : 0;
+    // Most common timing (string) and cleaner
+    const timeCounts = {};
+    const cleanerCounts = {};
+    sorted.forEach(v => {
+      if (v.timing) timeCounts[v.timing] = (timeCounts[v.timing] || 0) + 1;
+      if (v.cleaner) cleanerCounts[v.cleaner] = (cleanerCounts[v.cleaner] || 0) + 1;
+    });
+    const topTime = Object.entries(timeCounts).sort((a, b) => b[1] - a[1])[0];
+    const topCleaner = Object.entries(cleanerCounts).sort((a, b) => b[1] - a[1])[0];
+    // Classify cadence
+    let cadence = 'ONE-OFF';
+    if (n === 1) cadence = 'ONE-OFF';
+    else if (n >= 10 && avgGap && avgGap <= 1.8) cadence = 'DAILY';
+    else if (avgGap && avgGap >= 2 && avgGap <= 4) cadence = 'SEMI-WEEKLY';
+    else if (avgGap && avgGap >= 5 && avgGap <= 9 && topWdPct >= 60) cadence = 'WEEKLY';
+    else if (avgGap && avgGap >= 11 && avgGap <= 17 && topWdPct >= 50) cadence = 'BI-WEEKLY';
+    else if (avgGap && avgGap >= 25 && avgGap <= 35) cadence = 'MONTHLY';
+    else if (avgGap && avgGap > 35) cadence = 'RARE';
+    else cadence = 'IRREGULAR';
+    return {
+      cadence, visits: n, avgGap,
+      topWeekday: topWd, topWeekdayPct: topWdPct,
+      lastVisit: sorted[sorted.length - 1].date,
+      suggestedTime: topTime ? topTime[0] : '',
+      suggestedCleaner: topCleaner ? topCleaner[0] : '',
+      suggestedPricePerHour: sorted[sorted.length - 1].pricePerHour || 25,
+      suggestedPickupType: sorted[sorted.length - 1].pickupType || 'OFFICE',
+      suggestedWithMaterials: sorted[sorted.length - 1].withMaterials || false,
+    };
+  };
+
+  // Compute smart suggestions for the current date: pattern-based clients likely due today
+  // who are NOT already in bookings and NOT covered by contracts or pre-scheduled.
+  // Returns array of { clientId, clientName, phone, location, lat, lng, cadence, reason, suggestedTime, suggestedCleaner, ... }
+  const smartSuggestions = React.useMemo(() => {
+    if (!date) return [];
+    const todayDate = new Date(date + 'T12:00:00');
+    const todayWeekday = todayDate.getDay();
+    // Clients already covered (don't suggest them):
+    const covered = new Set();
+    // By current bookings (either from auto-run contracts or manual)
+    bookings.forEach(b => { if (b.clientId) covered.add(b.clientId); });
+    // By pre-scheduled bookings for today
+    scheduledBookings.forEach(s => { if (s.date === date && s.clientId && s.status !== 'cancelled') covered.add(s.clientId); });
+    // By active contracts matching today
+    contracts.forEach(c => { if (c.active && c.daysOfWeek.includes(todayWeekday) && c.clientId) covered.add(c.clientId); });
+
+    // Group historical bookings by client (last 90 days only)
+    const cutoff = new Date(todayDate.getTime() - 90 * 86400000);
+    const byClient = {};
+    allHistoricalBookings.forEach(b => {
+      if (!b.clientId) return;
+      if (covered.has(b.clientId)) return;
+      const d = new Date(b.date + 'T12:00:00');
+      if (d < cutoff || d > todayDate) return; // past 90 days only, not future
+      if (!byClient[b.clientId]) byClient[b.clientId] = [];
+      byClient[b.clientId].push(b);
+    });
+
+    const suggestions = [];
+    Object.entries(byClient).forEach(([clientId, visits]) => {
+      const classification = classifyClient(visits);
+      if (!classification) return;
+      const { cadence, avgGap, topWeekday, topWeekdayPct, lastVisit, visits: n } = classification;
+      // Decide if "due" today
+      const daysSinceLast = Math.round((todayDate - new Date(lastVisit + 'T12:00:00')) / 86400000);
+      if (daysSinceLast <= 0) return; // already came today (shouldn't happen since filtered)
+      let shouldSuggest = false;
+      let reason = '';
+      if (cadence === 'DAILY') {
+        shouldSuggest = daysSinceLast >= 1;
+        reason = `Daily client · last visit ${daysSinceLast}d ago`;
+      } else if (cadence === 'SEMI-WEEKLY') {
+        shouldSuggest = daysSinceLast >= 2 && daysSinceLast <= 7;
+        reason = `Semi-weekly · last visit ${daysSinceLast}d ago · ${n} visits`;
+      } else if (cadence === 'WEEKLY') {
+        shouldSuggest = (todayWeekday === topWeekday) && (daysSinceLast >= 6);
+        reason = `Weekly · last visit ${daysSinceLast}d ago · ${Math.round(topWeekdayPct)}% on ${weekdayName(topWeekday)}s`;
+      } else if (cadence === 'BI-WEEKLY') {
+        shouldSuggest = (todayWeekday === topWeekday) && (daysSinceLast >= 12);
+        reason = `Bi-weekly · last visit ${daysSinceLast}d ago · usually ${weekdayName(topWeekday)}`;
+      } else if (cadence === 'MONTHLY') {
+        shouldSuggest = daysSinceLast >= 25;
+        reason = `Monthly · last visit ${daysSinceLast}d ago`;
+      }
+      if (!shouldSuggest) return;
+      const client = clients.find(c => c.id === clientId);
+      const lastVisitObj = visits.sort((a, b) => b.date.localeCompare(a.date))[0];
+      suggestions.push({
+        clientId,
+        clientName: lastVisitObj.clientName || client?.name || '',
+        phone: client?.phone || lastVisitObj.phone || '',
+        location: client?.address || lastVisitObj.location || '',
+        lat: client?.lat || lastVisitObj.lat,
+        lng: client?.lng || lastVisitObj.lng,
+        cadence, reason,
+        confidence: (cadence === 'DAILY' || cadence === 'SEMI-WEEKLY') ? 'high' : 'medium',
+        suggestedTime: classification.suggestedTime,
+        suggestedCleaner: classification.suggestedCleaner,
+        pricePerHour: classification.suggestedPricePerHour,
+        pickupType: classification.suggestedPickupType,
+        withMaterials: classification.suggestedWithMaterials,
+        lastVisit, daysSinceLast,
+      });
+    });
+    // Sort: high confidence first, then by cadence priority
+    const prio = { DAILY: 1, 'SEMI-WEEKLY': 2, WEEKLY: 3, 'BI-WEEKLY': 4, MONTHLY: 5 };
+    suggestions.sort((a, b) => (prio[a.cadence] || 9) - (prio[b.cadence] || 9));
+    return suggestions;
+  }, [date, bookings, scheduledBookings, contracts, clients, allHistoricalBookings]);
+
+  // Helper: weekday name from day index (0=Sunday)
+  function weekdayName(idx) {
+    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][idx] || '';
+  }
+
+  // Auto-run on date change: add contracts + scheduled bookings for the date
+  // (silently, without duplicates). Uses autoRunDates Set so each date runs only once per session.
+  useEffect(() => {
+    if (!date) return;
+    if (autoRunDates.has(date)) return;
+    autoRunDates.add(date);
+    setSmartBuilderDismissed(false);
+
+    const dayOfWeek = new Date(date + 'T12:00:00').getDay();
+    const existingPairs = new Set(
+      bookings.filter(b => b.clientId && b.cleaner).map(b => `${b.clientId}::${b.cleaner}`)
+    );
+    const toAdd = [];
+
+    // 1. Contracts matching today's weekday
+    contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek)).forEach(c => {
+      const key = `${c.clientId}::${c.cleaner}`;
+      if (existingPairs.has(key)) return;
+      existingPairs.add(key);
+      const client = clients.find(cl => cl.id === c.clientId);
+      toAdd.push({
+        ...emptyBooking(),
+        cleaner: c.cleaner, timing: c.timing, clientId: c.clientId,
+        clientName: c.clientName, location: client?.address || '', phone: client?.phone || '',
+        lat: client?.lat, lng: client?.lng,
+        pricePerHour: c.pricePerHour, withMaterials: c.withMaterials, paymentType: c.paymentType,
+        source: 'contract',
+      });
+    });
+
+    // 2. Pre-scheduled bookings for today
+    scheduledBookings.filter(s => s.date === date && s.status === 'pending' && !s.autoAdded).forEach(s => {
+      const key = `${s.clientId || s.clientName}::${s.cleaner}`;
+      if (existingPairs.has(key)) return;
+      existingPairs.add(key);
+      toAdd.push({
+        ...emptyBooking(),
+        cleaner: s.cleaner, timing: s.timing, clientId: s.clientId,
+        clientName: s.clientName, location: s.location, phone: s.phone,
+        lat: s.lat, lng: s.lng,
+        pricePerHour: s.pricePerHour, withMaterials: s.withMaterials, paymentType: s.paymentType,
+        pickupType: s.pickupType, notes: s.notes || '',
+        source: 'scheduled', scheduledId: s.id,
+      });
+    });
+
+    if (toAdd.length > 0) {
+      const cleaned = bookings.filter(b => b.clientName || b.location);
+      setBookings([...cleaned, ...toAdd]);
+      // Mark scheduled bookings as autoAdded so they don't double-fire
+      const scheduledIdsAdded = toAdd.filter(b => b.scheduledId).map(b => b.scheduledId);
+      if (scheduledIdsAdded.length > 0) {
+        const next = scheduledBookings.map(s =>
+          scheduledIdsAdded.includes(s.id) ? { ...s, autoAdded: true, status: 'added' } : s
+        );
+        saveScheduledBookings(next);
+      }
+      showStatus(`✓ Auto-added ${toAdd.length} jobs (contracts + scheduled)`);
+    }
+  // Only re-run when date changes (not when bookings change) to avoid loops
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date]);
 
   // ===== DERIVED STATE =====
   const bookingsWithCalc = bookings.filter(b => b.clientName || b.location).map(b => {
@@ -942,11 +1198,9 @@ export default function CleaningApp() {
   };
 
   const exportContractsExcel = () => {
-    const headers = ['CLIENT', 'CLEANER(S)', 'DAYS', 'TIMING', 'RATE/HR', 'MAT.', 'PAYMENT', 'STATUS'];
+    const headers = ['CLIENT', 'CLEANER', 'DAYS', 'TIMING', 'RATE/HR', 'MAT.', 'PAYMENT', 'STATUS'];
     const rows = contracts.map(c => [
-      c.clientName,
-      (Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [c.cleaner].filter(Boolean)).join(' + '),
-      c.daysOfWeek.map(d => DAYS[d]).join(', '),
+      c.clientName, c.cleaner, c.daysOfWeek.map(d => DAYS[d]).join(', '),
       c.timing, Number(c.pricePerHour), c.withMaterials ? 'Yes' : 'No',
       c.paymentType, c.active ? 'Active' : 'Paused'
     ]);
@@ -1400,11 +1654,9 @@ export default function CleaningApp() {
     // ===== SHEET 4: CONTRACTS =====
     if (contracts.length > 0) {
       const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      const headers = ['CLIENT', 'CLEANER(S)', 'TIMING', 'DAYS', 'RATE/HR', 'MATERIALS', 'PAY TYPE', 'STATUS'];
+      const headers = ['CLIENT', 'CLEANER', 'TIMING', 'DAYS', 'RATE/HR', 'MATERIALS', 'PAY TYPE', 'STATUS'];
       const rows = contracts.map(c => [
-        c.clientName,
-        (Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [c.cleaner].filter(Boolean)).join(' + '),
-        c.timing,
+        c.clientName, c.cleaner, c.timing,
         (c.daysOfWeek || []).map(d => dayNames[d]).join(', '),
         Number(c.pricePerHour), c.withMaterials ? 'Yes' : 'No', c.paymentType,
         c.active ? 'ACTIVE' : 'PAUSED'
@@ -1559,7 +1811,7 @@ export default function CleaningApp() {
       </div>
 
       <div style={{ padding: '32px', maxWidth: '1400px', margin: '0 auto' }}>
-        {view === 'input' && <InputView bookings={bookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} />}
+        {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
         {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
@@ -1583,7 +1835,7 @@ export default function CleaningApp() {
   );
 }
 
-function InputView({ bookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, allCleaners, clients, saveClients, setClientPickerFor, setBookingPinFor, contracts, generateFromContracts, exportEverythingExcel, companyInfo }) {
+function InputView({ bookings, setBookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, allCleaners, clients, saveClients, setClientPickerFor, setBookingPinFor, contracts, generateFromContracts, exportEverythingExcel, companyInfo, scheduledBookings, saveScheduledBookings, smartSuggestions, smartBuilderDismissed, setSmartBuilderDismissed }) {
   const dayOfWeek = new Date(date).getDay();
   const todayContracts = contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek));
   const [showFastBooking, setShowFastBooking] = useState(false);
@@ -1650,6 +1902,34 @@ Thank you for choosing us!
           <button className="btn btn-primary btn-sm" onClick={generateFromContracts}><Plus size={14} /> Auto-fill from contracts</button>
         </div>
       )}
+
+      {/* ============ SMART DAY BUILDER PANEL ============ */}
+      {!smartBuilderDismissed && (
+        <SmartDayBuilder
+          bookings={bookings}
+          setBookings={setBookings}
+          date={date}
+          formatDate={formatDate}
+          colors={colors}
+          clients={clients}
+          allCleaners={allCleaners}
+          contracts={contracts}
+          scheduledBookings={scheduledBookings}
+          saveScheduledBookings={saveScheduledBookings}
+          smartSuggestions={smartSuggestions}
+          onDismiss={() => setSmartBuilderDismissed(true)}
+          companyInfo={companyInfo}
+        />
+      )}
+
+      {/* ============ BOOK LATER BUTTON (always visible on Bookings tab) ============ */}
+      <BookLaterLauncher
+        clients={clients}
+        allCleaners={allCleaners}
+        colors={colors}
+        scheduledBookings={scheduledBookings}
+        saveScheduledBookings={saveScheduledBookings}
+      />
 
       <div style={{ background: colors.paper, borderRadius: '12px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}>
         <div style={{ padding: '16px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
@@ -2249,24 +2529,14 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, al
     if (clients.length === 0) return alert('Add at least one client first in the Clients tab');
     setEditing(emptyContract());
   };
-  // Normalize older single-cleaner contracts on open so the editor always sees a `cleaners` array
-  const startEdit = (c) => setEditing({ ...normalizeContract(c) });
+  const startEdit = (c) => setEditing({ ...c });
 
   const save = () => {
     if (!editing.clientId) return alert('Pick a client');
     if (editing.daysOfWeek.length === 0) return alert('Pick at least one day');
     if (!editing.timing) return alert('Add timing');
-    const cleaners = Array.isArray(editing.cleaners) && editing.cleaners.length > 0
-      ? editing.cleaners
-      : [editing.cleaner || 'Leah'];
     const client = clients.find(c => c.id === editing.clientId);
-    // Keep legacy `cleaner` field synced to the first entry for backward compat
-    const final = {
-      ...editing,
-      clientName: client.name,
-      cleaners,
-      cleaner: cleaners[0],
-    };
+    const final = { ...editing, clientName: client.name };
     const exists = contracts.find(c => c.id === editing.id);
     saveContracts(exists ? contracts.map(c => c.id === editing.id ? final : c) : [...contracts, final]);
     setEditing(null);
@@ -2275,21 +2545,6 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, al
   const toggleDay = (dayIdx) => {
     const has = editing.daysOfWeek.includes(dayIdx);
     setEditing({ ...editing, daysOfWeek: has ? editing.daysOfWeek.filter(d => d !== dayIdx) : [...editing.daysOfWeek, dayIdx].sort() });
-  };
-
-  // Toggle a cleaner on/off in the editing contract. At least one must remain.
-  const toggleCleaner = (name) => {
-    const current = Array.isArray(editing.cleaners) ? editing.cleaners : [editing.cleaner].filter(Boolean);
-    const has = current.includes(name);
-    if (has) {
-      if (current.length <= 1) {
-        alert('A contract needs at least one assigned cleaner.');
-        return;
-      }
-      setEditing({ ...editing, cleaners: current.filter(c => c !== name) });
-    } else {
-      setEditing({ ...editing, cleaners: [...current, name] });
-    }
   };
 
   const toggleActive = (id) => saveContracts(contracts.map(c => c.id === id ? { ...c, active: !c.active } : c));
@@ -2326,20 +2581,7 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, al
                 {!c.active && <span className="badge" style={{ background: '#FEE2E2', color: colors.rust }}>PAUSED</span>}
               </div>
               <div style={{ fontSize: '12px', color: colors.ink + 'AA', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-                {/* Show all assigned cleaners with a TEAM badge when more than one */}
-                {(() => {
-                  const list = Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [c.cleaner].filter(Boolean);
-                  return (
-                    <span>
-                      <strong>{list.join(' + ')}</strong>
-                      {list.length > 1 && (
-                        <span style={{ marginLeft: '6px', fontSize: '10px', padding: '2px 7px', background: colors.accent, color: 'white', borderRadius: '10px', fontWeight: 700, letterSpacing: '0.05em' }}>
-                          TEAM OF {list.length}
-                        </span>
-                      )}
-                    </span>
-                  );
-                })()}
+                <span><strong>{c.cleaner}</strong></span>
                 <span className="mono">{c.timing}</span>
                 <span>{c.daysOfWeek.map(d => DAYS[d]).join(', ')}</span>
                 <span style={{ color: colors.accent, fontWeight: 600 }}>{c.pricePerHour} AED/hr</span>
@@ -2370,54 +2612,12 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, al
                   {clients.map(c => <option key={c.id} value={c.id}>{c.name} · {c.address}</option>)}
                 </select>
               </Field>
-              {/* Multi-cleaner picker: tap chips to toggle each cleaner on/off.
-                  For jobs where you send a TEAM of 2+ cleaners (big villas, deep cleans).
-                  Auto-fill creates one booking per cleaner so payroll/deployment track each separately. */}
-              <Field label={`Assigned Cleaner${(editing.cleaners || []).length > 1 ? 's' : ''} * — tap to add or remove`}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '4px 0' }}>
-                  {(() => {
-                    const roster = allCleaners || CLEANERS || [];
-                    const list = Array.isArray(editing.cleaners) && editing.cleaners.length > 0
-                      ? editing.cleaners
-                      : [editing.cleaner].filter(Boolean);
-                    // Also include any already-picked cleaner who isn't in the active roster
-                    // (preserves legacy data — same safety as the old <option> fallback)
-                    const extras = list.filter(n => !roster.includes(n));
-                    const chips = [...roster, ...extras];
-                    return chips.map(name => {
-                      const picked = list.includes(name);
-                      return (
-                        <button
-                          key={name}
-                          type="button"
-                          onClick={() => toggleCleaner(name)}
-                          style={{
-                            padding: '7px 14px',
-                            borderRadius: '20px',
-                            border: `1.5px solid ${picked ? colors.accent : colors.border}`,
-                            background: picked ? colors.accent : 'white',
-                            color: picked ? 'white' : colors.ink,
-                            fontSize: '13px',
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            fontFamily: 'inherit',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '5px',
-                          }}
-                        >
-                          {picked && <span style={{ fontSize: '11px' }}>✓</span>}
-                          {name}
-                        </button>
-                      );
-                    });
-                  })()}
-                </div>
-                {(editing.cleaners || []).length > 1 && (
-                  <div style={{ fontSize: '11px', color: colors.ink + '99', marginTop: '8px', padding: '6px 10px', background: (colors.accentLight || '#F0F8F4'), borderRadius: '6px' }}>
-                    💡 This contract will create <strong>{editing.cleaners.length} separate bookings</strong> each time it runs — one per cleaner. All at the same time, same client, same price per cleaner.
-                  </div>
-                )}
+              <Field label="Assigned Cleaner *">
+                <select className="select" value={editing.cleaner} onChange={e => setEditing({ ...editing, cleaner: e.target.value })}>
+                  {/* Preserve current cleaner even if not in the active roster */}
+                  {editing.cleaner && !(allCleaners || CLEANERS).includes(editing.cleaner) && <option key={editing.cleaner}>{editing.cleaner}</option>}
+                  {(allCleaners || CLEANERS).map(c => <option key={c}>{c}</option>)}
+                </select>
               </Field>
               <Field label="Days of week *">
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -4990,9 +5190,7 @@ function SettingsView({ companyInfo, saveCompanyInfo, colors, cloudStatus, lastS
       log('Pushing contracts...');
       if (contracts.length > 0) {
         const rows = contracts.map(c => ({
-          id: c.id, client_id: c.clientId, client_name: c.clientName,
-          cleaner: c.cleaner,
-          cleaners: Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [c.cleaner].filter(Boolean),
+          id: c.id, client_id: c.clientId, client_name: c.clientName, cleaner: c.cleaner,
           days_of_week: c.daysOfWeek || [], timing: c.timing || '',
           price_per_hour: c.pricePerHour || 25, with_materials: c.withMaterials || false,
           payment_type: c.paymentType || 'ONLINE', active: c.active !== false,
@@ -7718,6 +7916,436 @@ function StaffLinksView({ allCleaners, cleanerProfiles, saveCleanerProfiles, com
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+// ============================================================================
+// ========== SMART DAY BUILDER COMPONENT =====================================
+// ============================================================================
+// Renders 3 sections on the Bookings tab:
+//   1. GREEN  — already-auto-added (contracts + pre-scheduled) — collapsible read-only
+//   2. DARK GREEN — smart suggestions (pattern-detected, editable per row)
+//   3. GOLD — reminders for tomorrow's pre-scheduled bookings (WhatsApp send)
+function SmartDayBuilder({ bookings, setBookings, date, formatDate, colors, clients, allCleaners, contracts, scheduledBookings, saveScheduledBookings, smartSuggestions, onDismiss, companyInfo }) {
+  const [autoExpanded, setAutoExpanded] = React.useState(false);
+  // Local state for the suggestion rows (so user can tick/untick + edit time/cleaner)
+  // Rebuilds when smartSuggestions changes (new day or new bookings)
+  const [rows, setRows] = React.useState([]);
+  React.useEffect(() => {
+    setRows(smartSuggestions.map(s => ({
+      ...s,
+      checked: true,
+      timeEdit: s.suggestedTime || '',
+      cleanerEdit: s.suggestedCleaner || (allCleaners[0] || ''),
+    })));
+  }, [smartSuggestions, allCleaners]);
+
+  // Figure out what's AUTO-ADDED today: contracts + scheduled for today
+  const todayDate = new Date(date + 'T12:00:00');
+  const todayWeekday = todayDate.getDay();
+  const autoContracts = contracts.filter(c => c.active && c.daysOfWeek.includes(todayWeekday));
+  const autoScheduled = scheduledBookings.filter(s => s.date === date && s.status !== 'cancelled');
+  const autoTotal = autoContracts.length + autoScheduled.length;
+
+  // Tomorrow's reminders (scheduled bookings for tomorrow that haven't been reminded yet)
+  const tomorrowStr = (() => {
+    const d = new Date(date + 'T12:00:00');
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().slice(0, 10);
+  })();
+  const tomorrowReminders = scheduledBookings.filter(s =>
+    s.date === tomorrowStr && s.status !== 'cancelled' && s.reminderPref !== false
+  );
+
+  const toggleRow = (clientId) => {
+    setRows(rs => rs.map(r => r.clientId === clientId ? { ...r, checked: !r.checked } : r));
+  };
+  const updateRowField = (clientId, field, value) => {
+    setRows(rs => rs.map(r => r.clientId === clientId ? { ...r, [field]: value } : r));
+  };
+  const skipRow = (clientId) => {
+    setRows(rs => rs.filter(r => r.clientId !== clientId));
+  };
+
+  const addSelectedSuggestions = () => {
+    const toAdd = rows.filter(r => r.checked).map(r => ({
+      id: 'b_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      cleaner: r.cleanerEdit, timing: r.timeEdit, clientId: r.clientId,
+      clientName: r.clientName, location: r.location, phone: r.phone,
+      lat: r.lat, lng: r.lng, pickupType: r.pickupType || 'OFFICE',
+      pricePerHour: r.pricePerHour || 25, withMaterials: !!r.withMaterials,
+      paymentType: 'ONLINE', paymentStatus: 'PENDING', notes: '',
+    }));
+    if (toAdd.length === 0) return;
+    const cleaned = bookings.filter(b => b.clientName || b.location);
+    setBookings([...cleaned, ...toAdd]);
+    setRows([]); // clear suggestions after adding
+  };
+
+  const sendReminder = (sched) => {
+    const client = clients.find(c => c.id === sched.clientId);
+    const phone = sched.phone || client?.phone || '';
+    const niceDate = new Date(sched.date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' });
+    const msg = `Hello ${sched.clientName}! 👋\n\nReminder: your cleaning appointment is tomorrow (${niceDate}) at ${sched.timing}.\n\n📍 ${sched.location || 'at your address'}\n\nSee you then!\n\n— ${companyInfo?.name || 'AR Cleaning Services'}`;
+    let digits = String(phone).replace(/[^\d]/g, '');
+    if (digits.startsWith('00')) digits = digits.slice(2);
+    if (digits.startsWith('0')) digits = '971' + digits.slice(1);
+    if (!digits.startsWith('971') && digits.length <= 9) digits = '971' + digits;
+    const waUrl = digits ? `https://wa.me/${digits}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+    window.open(waUrl, '_blank');
+    // Mark reminder as sent
+    const next = scheduledBookings.map(s => s.id === sched.id ? { ...s, reminderSent: true } : s);
+    saveScheduledBookings(next);
+  };
+
+  const sendAllReminders = () => {
+    tomorrowReminders.filter(r => !r.reminderSent).forEach(r => sendReminder(r));
+  };
+
+  const selectedCount = rows.filter(r => r.checked).length;
+
+  // Nothing to show → hide the panel entirely
+  if (autoTotal === 0 && rows.length === 0 && tomorrowReminders.length === 0) {
+    return null;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '20px' }}>
+
+      {/* ========== GREEN: AUTO-ADDED SECTION ========== */}
+      {autoTotal > 0 && (
+        <div style={{ background: 'linear-gradient(135deg, #DEF7E7 0%, #F0FDF4 100%)', border: '2px solid #16A34A', borderRadius: '12px', padding: '16px 22px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => setAutoExpanded(!autoExpanded)}>
+            <div>
+              <div className="display-font" style={{ fontSize: '18px', fontWeight: 800, color: '#15803D', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                ✅ {autoTotal} jobs auto-added for today
+                <span style={{ background: '#16A34A', color: 'white', padding: '3px 10px', borderRadius: '20px', fontSize: '10px', fontWeight: 800, letterSpacing: '0.05em' }}>AUTO</span>
+              </div>
+              <div style={{ fontSize: '12px', color: '#166534', marginTop: '2px' }}>
+                {autoContracts.length} from contracts · {autoScheduled.length} pre-scheduled — already in Bookings, Deployment &amp; Driver
+              </div>
+            </div>
+            <div style={{ fontSize: '18px', color: '#16A34A', transform: autoExpanded ? 'rotate(0)' : 'rotate(-90deg)', transition: 'transform 0.2s' }}>▼</div>
+          </div>
+          {autoExpanded && (
+            <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {autoContracts.map(c => (
+                <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '24px 1fr auto auto auto', gap: '12px', padding: '10px 14px', background: 'white', borderRadius: '8px', border: '1px solid #BBF7D0', alignItems: 'center' }}>
+                  <div style={{ color: '#16A34A', fontWeight: 800 }}>✓</div>
+                  <div><strong style={{ fontSize: '14px' }}>{c.clientName}</strong></div>
+                  <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '10px', fontWeight: 800, background: '#0F4C3A', color: 'white', textTransform: 'uppercase' }}>Contract</span>
+                  <span className="mono" style={{ fontWeight: 700, fontSize: '13px' }}>{c.timing}</span>
+                  <span style={{ padding: '3px 8px', background: '#E8F5F0', color: '#0F4C3A', borderRadius: '6px', fontSize: '11px', fontWeight: 700 }}>{c.cleaner}</span>
+                </div>
+              ))}
+              {autoScheduled.map(s => (
+                <div key={s.id} style={{ display: 'grid', gridTemplateColumns: '24px 1fr auto auto auto', gap: '12px', padding: '10px 14px', background: 'white', borderRadius: '8px', border: '1px solid #BBF7D0', alignItems: 'center' }}>
+                  <div style={{ color: '#16A34A', fontWeight: 800 }}>✓</div>
+                  <div>
+                    <strong style={{ fontSize: '14px' }}>{s.clientName}</strong>
+                    <div style={{ fontSize: '11px', color: '#888' }}>{s.location} {s.reminderSent && '· reminded ✓'}</div>
+                  </div>
+                  <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '10px', fontWeight: 800, background: '#7C3AED', color: 'white', textTransform: 'uppercase' }}>Pre-scheduled</span>
+                  <span className="mono" style={{ fontWeight: 700, fontSize: '13px' }}>{s.timing}</span>
+                  <span style={{ padding: '3px 8px', background: '#E8F5F0', color: '#0F4C3A', borderRadius: '6px', fontSize: '11px', fontWeight: 700 }}>{s.cleaner}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========== DARK GREEN: SMART SUGGESTIONS ========== */}
+      {rows.length > 0 && (
+        <div style={{ background: 'white', borderRadius: '14px', border: `2px solid ${colors.accent}`, overflow: 'hidden', boxShadow: '0 4px 20px rgba(15,76,58,0.08)' }}>
+          <div style={{ background: `linear-gradient(135deg, ${colors.accent}, #1a6b55)`, color: 'white', padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#F4D35E', color: colors.accent, padding: '3px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '6px' }}>💡 Smart Suggestions</div>
+              <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, marginBottom: '2px' }}>{rows.length} flexible pattern clients likely due today</div>
+              <div style={{ fontSize: '12px', opacity: 0.9, maxWidth: '500px' }}>These have no fixed schedule — I guessed time &amp; cleaner from past bookings. Review each before adding.</div>
+            </div>
+            <div style={{ background: 'rgba(255,255,255,0.15)', padding: '10px 16px', borderRadius: '10px', textAlign: 'center', minWidth: '110px' }}>
+              <div className="display-font" style={{ fontSize: '26px', fontWeight: 800, lineHeight: 1 }}>{selectedCount}</div>
+              <div style={{ fontSize: '10px', opacity: 0.85, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: '2px' }}>selected</div>
+            </div>
+          </div>
+
+          <div style={{ padding: '14px 22px 6px' }}>
+            {rows.map(r => {
+              const cadenceBadge = {
+                'DAILY': { bg: '#DC2626', label: 'Daily' },
+                'SEMI-WEEKLY': { bg: '#EA580C', label: 'Semi-weekly' },
+                'WEEKLY': { bg: colors.accent, label: 'Weekly' },
+                'BI-WEEKLY': { bg: '#7C3AED', label: 'Bi-weekly' },
+                'MONTHLY': { bg: '#0369A1', label: 'Monthly' },
+              }[r.cadence] || { bg: '#888', label: r.cadence };
+              return (
+                <div key={r.clientId} style={{ display: 'grid', gridTemplateColumns: '32px 1fr', gap: '12px', padding: '14px', alignItems: 'start', borderRadius: '10px', marginBottom: '10px', border: `1.5px solid ${r.checked ? colors.accent : colors.border}`, background: r.checked ? '#E8F5F0' : 'white', opacity: r.checked ? 1 : 0.55 }}>
+                  <div style={{ cursor: 'pointer', paddingTop: '2px' }} onClick={() => toggleRow(r.clientId)}>
+                    <div style={{ width: '22px', height: '22px', border: `2px solid ${r.checked ? colors.accent : '#999'}`, borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: r.checked ? colors.accent : 'white', fontWeight: 800, color: 'white' }}>
+                      {r.checked ? '✓' : ''}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                      <div style={{ fontWeight: 700, fontSize: '15px' }}>{r.clientName}</div>
+                      <span style={{ padding: '3px 8px', borderRadius: '20px', fontSize: '10px', fontWeight: 800, letterSpacing: '0.03em', textTransform: 'uppercase', background: cadenceBadge.bg, color: 'white' }}>{cadenceBadge.label}</span>
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#666', marginBottom: '10px' }}>{r.reason}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '8px', alignItems: 'end' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <label style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#888', fontWeight: 700, marginBottom: '4px' }}>Time</label>
+                        <input type="text" value={r.timeEdit} onChange={e => updateRowField(r.clientId, 'timeEdit', e.target.value)} style={{ padding: '7px 10px', border: `1.5px solid ${colors.border}`, borderRadius: '7px', fontSize: '13px', fontWeight: 600, background: 'white', fontFamily: 'inherit' }} disabled={!r.checked} />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <label style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#888', fontWeight: 700, marginBottom: '4px' }}>Cleaner</label>
+                        <select value={r.cleanerEdit} onChange={e => updateRowField(r.clientId, 'cleanerEdit', e.target.value)} style={{ padding: '7px 10px', border: `1.5px solid ${colors.border}`, borderRadius: '7px', fontSize: '13px', fontWeight: 600, background: 'white', fontFamily: 'inherit' }} disabled={!r.checked}>
+                          {allCleaners.map(c => <option key={c}>{c}</option>)}
+                          {r.cleanerEdit && !allCleaners.includes(r.cleanerEdit) && <option key={r.cleanerEdit}>{r.cleanerEdit}</option>}
+                        </select>
+                      </div>
+                      <button onClick={() => skipRow(r.clientId)} style={{ padding: '6px 10px', border: '1.5px solid #FEE2E2', background: '#FEF2F2', color: '#DC2626', borderRadius: '7px', fontWeight: 700, fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit', alignSelf: 'end' }}>Skip</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ background: '#FAF7F0', padding: '16px 22px', display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'flex-end', borderTop: `1px solid ${colors.border}` }}>
+            <button className="btn" onClick={onDismiss}>Dismiss</button>
+            <button className="btn btn-primary" onClick={addSelectedSuggestions} disabled={selectedCount === 0}>
+              <Check size={14} /> {selectedCount === 0 ? 'Nothing selected' : `Add ${selectedCount} to Bookings`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ========== GOLD: TOMORROW'S REMINDERS ========== */}
+      {tomorrowReminders.length > 0 && (
+        <div style={{ background: 'linear-gradient(135deg, #FEF9E7 0%, white 100%)', border: '2px solid #F4D35E', borderRadius: '14px', padding: '20px 22px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+            <div>
+              <div className="display-font" style={{ fontSize: '18px', fontWeight: 800, color: '#78350F', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                📱 Send WhatsApp reminders for tomorrow
+              </div>
+              <div style={{ fontSize: '12px', color: '#92400E', marginTop: '2px' }}>
+                {tomorrowReminders.length} pre-scheduled booking{tomorrowReminders.length > 1 ? 's' : ''} on {new Date(tomorrowStr + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} — remind each client tonight
+              </div>
+            </div>
+            {tomorrowReminders.filter(r => !r.reminderSent).length > 0 && (
+              <button className="btn" style={{ background: '#25D366', color: 'white', borderColor: '#25D366' }} onClick={sendAllReminders}>
+                <MessageCircle size={14} /> Send all {tomorrowReminders.filter(r => !r.reminderSent).length}
+              </button>
+            )}
+          </div>
+          {tomorrowReminders.map(r => (
+            <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '12px', padding: '12px 14px', background: r.reminderSent ? '#F0FDF4' : 'white', borderRadius: '10px', marginBottom: '8px', border: `1px solid ${r.reminderSent ? '#86EFAC' : '#FDE68A'}`, alignItems: 'center', opacity: r.reminderSent ? 0.65 : 1 }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '2px' }}>{r.clientName}</div>
+                <div style={{ fontSize: '11px', color: '#666' }}>
+                  tomorrow {r.timing} · {r.location || '(no address)'} · <span className="mono">{r.phone || '(no phone)'}</span>
+                </div>
+              </div>
+              {r.reminderSent ? (
+                <span style={{ background: '#16A34A', color: 'white', fontSize: '10px', padding: '4px 10px', borderRadius: '4px', fontWeight: 800 }}>✓ SENT</span>
+              ) : (
+                <button className="btn btn-sm" style={{ background: '#25D366', color: 'white', borderColor: '#25D366' }} onClick={() => sendReminder(r)}>
+                  <MessageCircle size={12} /> Send
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+// ============================================================================
+// ========== BOOK LATER LAUNCHER (purple button + modal) =====================
+// ============================================================================
+function BookLaterLauncher({ clients, allCleaners, colors, scheduledBookings, saveScheduledBookings }) {
+  const [open, setOpen] = React.useState(false);
+  const tomorrow = (() => {
+    const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10);
+  })();
+  return (
+    <>
+      <div style={{ display: 'flex', gap: '10px', margin: '0 0 16px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <button className="btn" onClick={() => setOpen(true)} style={{ background: '#7C3AED', color: 'white', borderColor: '#7C3AED', fontWeight: 700 }}>
+          📅 Book Later (future appointment)
+        </button>
+        <div style={{ fontSize: '12px', color: colors.ink + '77' }}>
+          {scheduledBookings.filter(s => s.status === 'pending' && new Date(s.date) >= new Date(new Date().toISOString().slice(0,10))).length} upcoming scheduled bookings
+        </div>
+      </div>
+      {open && (
+        <BookLaterModal
+          clients={clients}
+          allCleaners={allCleaners}
+          colors={colors}
+          scheduledBookings={scheduledBookings}
+          saveScheduledBookings={saveScheduledBookings}
+          defaultDate={tomorrow}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function BookLaterModal({ clients, allCleaners, colors, scheduledBookings, saveScheduledBookings, defaultDate, onClose }) {
+  const [search, setSearch] = React.useState('');
+  const [picked, setPicked] = React.useState(null); // existing client or null
+  const [form, setForm] = React.useState({
+    clientName: '', phone: '', location: '', lat: null, lng: null,
+    date: defaultDate, timing: '', cleaner: allCleaners[0] || '',
+    pricePerHour: 25, pickupType: 'OFFICE', withMaterials: false,
+    paymentType: 'ONLINE', notes: '', reminderPref: true,
+  });
+
+  // Match clients by name or phone
+  const searchDigits = search.replace(/[^\d]/g, '');
+  const matches = search.trim().length === 0 ? [] : clients.filter(c => {
+    const n = c.name && c.name.toLowerCase().includes(search.toLowerCase());
+    const p = searchDigits.length >= 3 && c.phone && c.phone.replace(/[^\d]/g, '').includes(searchDigits);
+    return n || p;
+  }).slice(0, 6);
+
+  const pickClient = (c) => {
+    setPicked(c);
+    setForm(f => ({ ...f, clientName: c.name, phone: c.phone || '', location: c.address || '', lat: c.lat, lng: c.lng, pricePerHour: c.defaultRate || 25, withMaterials: c.defaultMaterials || false }));
+  };
+
+  const save = () => {
+    if (!form.clientName.trim()) return alert('Client name is required');
+    if (!form.date) return alert('Date is required');
+    if (new Date(form.date) < new Date(new Date().toISOString().slice(0, 10))) return alert('Date must be today or future');
+    if (!form.timing.trim()) return alert('Time is required (e.g. 10-12)');
+    if (!form.cleaner) return alert('Pick a cleaner');
+    const newSched = {
+      id: 'sb_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      clientId: picked?.id || null,
+      clientName: form.clientName.trim(),
+      phone: form.phone.trim(), location: form.location.trim(),
+      lat: form.lat, lng: form.lng,
+      date: form.date, timing: form.timing.trim(), cleaner: form.cleaner,
+      pricePerHour: Number(form.pricePerHour) || 25,
+      pickupType: form.pickupType, withMaterials: !!form.withMaterials,
+      paymentType: form.paymentType, notes: form.notes.trim(),
+      reminderPref: form.reminderPref, reminderSent: false,
+      autoAdded: false, status: 'pending',
+    };
+    saveScheduledBookings([...scheduledBookings, newSched]);
+    alert(`✓ Scheduled for ${new Date(form.date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}. ${form.reminderPref ? 'WhatsApp reminder will show the evening before.' : ''}`);
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: '14px', padding: '24px', maxWidth: '540px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+          <h3 className="display-font" style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: colors.accent }}>📅 Book Later</h3>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#999', fontSize: '18px' }}>✕</button>
+        </div>
+
+        {!picked && (
+          <div style={{ marginBottom: '14px' }}>
+            <label style={{ display: 'block', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#666', fontWeight: 700, marginBottom: '6px' }}>Search existing client (or type new below)</label>
+            <input className="input" placeholder="Name or phone..." value={search} onChange={e => setSearch(e.target.value)} />
+            {matches.length > 0 && (
+              <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '200px', overflowY: 'auto' }}>
+                {matches.map(c => (
+                  <button key={c.id} onClick={() => pickClient(c)} style={{ padding: '10px 12px', background: colors.soft, border: `1px solid ${colors.border}`, borderRadius: '8px', textAlign: 'left', cursor: 'pointer', fontSize: '13px', fontFamily: 'inherit' }}>
+                    <div style={{ fontWeight: 700 }}>{c.name}</div>
+                    <div style={{ fontSize: '11px', color: '#777' }}>{c.phone} · {c.address}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {picked && (
+          <div style={{ background: colors.accentLight || '#F0F8F4', border: `1px solid ${colors.accent}`, borderRadius: '8px', padding: '10px 12px', marginBottom: '14px', fontSize: '13px' }}>
+            <strong>{picked.name}</strong>
+            <button style={{ background: 'none', border: 'none', color: colors.accent, fontSize: '11px', cursor: 'pointer', marginLeft: '10px', fontWeight: 700 }} onClick={() => { setPicked(null); setForm(f => ({ ...f, clientName: '', phone: '', location: '', lat: null, lng: null })); }}>Change</button>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+          <label>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#666', fontWeight: 700, marginBottom: '6px' }}>Client name *</div>
+            <input className="input" value={form.clientName} onChange={e => setForm({ ...form, clientName: e.target.value })} placeholder="Full name" />
+          </label>
+          <label>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#666', fontWeight: 700, marginBottom: '6px' }}>Phone (for reminder)</div>
+            <input className="input" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="+971 50 ..." />
+          </label>
+        </div>
+
+        <label style={{ display: 'block', marginBottom: '12px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#666', fontWeight: 700, marginBottom: '6px' }}>Address</div>
+          <input className="input" value={form.location} onChange={e => setForm({ ...form, location: e.target.value })} placeholder="Apt, building, area" />
+        </label>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+          <label>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#666', fontWeight: 700, marginBottom: '6px' }}>Date *</div>
+            <input className="input" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} min={new Date().toISOString().slice(0, 10)} />
+          </label>
+          <label>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#666', fontWeight: 700, marginBottom: '6px' }}>Time *</div>
+            <input className="input" value={form.timing} onChange={e => setForm({ ...form, timing: e.target.value })} placeholder="10-12 or 14:30-16:30" />
+          </label>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+          <label>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#666', fontWeight: 700, marginBottom: '6px' }}>Cleaner *</div>
+            <select className="select" value={form.cleaner} onChange={e => setForm({ ...form, cleaner: e.target.value })}>
+              {allCleaners.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </label>
+          <label>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#666', fontWeight: 700, marginBottom: '6px' }}>Price per hour</div>
+            <input className="input" type="number" value={form.pricePerHour} onChange={e => setForm({ ...form, pricePerHour: e.target.value })} />
+          </label>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+          <label>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#666', fontWeight: 700, marginBottom: '6px' }}>Pickup</div>
+            <select className="select" value={form.pickupType} onChange={e => setForm({ ...form, pickupType: e.target.value })}>
+              <option>OFFICE</option><option>HOME</option>
+            </select>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingTop: '18px' }}>
+            <input type="checkbox" checked={form.withMaterials} onChange={e => setForm({ ...form, withMaterials: e.target.checked })} style={{ transform: 'scale(1.2)' }} />
+            <span style={{ fontSize: '13px' }}>With materials</span>
+          </label>
+        </div>
+
+        <label style={{ display: 'block', marginBottom: '12px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#666', fontWeight: 700, marginBottom: '6px' }}>Notes</div>
+          <textarea className="input" rows="2" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="Any special instructions..." style={{ resize: 'vertical' }} />
+        </label>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: colors.accentLight || '#F0F8F4', borderRadius: '8px', marginBottom: '16px', cursor: 'pointer' }}>
+          <input type="checkbox" checked={form.reminderPref} onChange={e => setForm({ ...form, reminderPref: e.target.checked })} style={{ transform: 'scale(1.2)' }} />
+          <div>
+            <div style={{ fontWeight: 700, fontSize: '13px' }}>Send WhatsApp reminder evening before</div>
+            <div style={{ fontSize: '11px', color: '#666' }}>Shows up in the Reminders panel the day before</div>
+          </div>
+        </label>
+
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', paddingTop: '14px', borderTop: `1px solid ${colors.border}` }}>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={save}><Save size={14} /> Save &amp; Schedule</button>
+        </div>
       </div>
     </div>
   );
