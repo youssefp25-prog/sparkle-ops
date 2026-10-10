@@ -1516,7 +1516,7 @@ export default function CleaningApp() {
         {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
         {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
-        {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} />}
+        {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} />}
         {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} currentDate={date} currentBookings={bookings} savedDays={savedDays} />}
         {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} payroll={payroll} savePayroll={savePayroll} PAYROLL_ROSTER={PAYROLL_ROSTER} cleanerProfiles={cleanerProfiles} />}
         {view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} allBookings={allBookingsWithDate} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} />}
@@ -1634,7 +1634,52 @@ Thank you for choosing us!
                     </Td>
                     <Td>
                       <div style={{ display: 'flex', gap: '3px', marginBottom: '3px' }}>
-                        <input className="input" placeholder="Apt 101 Bldg" value={b.location} onChange={e => updateBooking(b.id, 'location', e.target.value)} style={{ minWidth: '160px' }} />
+                        <input
+                          className="input"
+                          placeholder="Apt 101 Bldg"
+                          value={b.location}
+                          onChange={e => updateBooking(b.id, 'location', e.target.value)}
+                          onPaste={e => {
+                            // Smart paste: if the user pastes a Google Maps link / coords, extract lat/lng too.
+                            // This runs AS WELL AS the normal onChange, so for plain text addresses nothing special happens.
+                            const pasted = e.clipboardData?.getData('text') || '';
+                            if (!pasted) return;
+                            const parsed = parseLocationInput(pasted);
+                            if (parsed.lat && parsed.lng) {
+                              e.preventDefault();
+                              updateBooking(b.id, 'location', parsed.address);
+                              updateBooking(b.id, 'lat', parsed.lat);
+                              updateBooking(b.id, 'lng', parsed.lng);
+                            }
+                          }}
+                          style={{ minWidth: '160px' }}
+                        />
+                        <button
+                          className="btn btn-sm"
+                          title="Paste location from WhatsApp (coords or Google Maps link)"
+                          onClick={async () => {
+                            try {
+                              const text = await navigator.clipboard.readText();
+                              if (!text) {
+                                alert('Clipboard is empty.\n\nFirst copy a location:\n1. Open the WhatsApp location message\n2. Tap "View in Google Maps"\n3. Long-press the pin\n4. Tap the coordinates to copy\n\nOR copy the Google Maps share link.');
+                                return;
+                              }
+                              const parsed = parseLocationInput(text);
+                              updateBooking(b.id, 'location', parsed.address);
+                              if (parsed.lat && parsed.lng) {
+                                updateBooking(b.id, 'lat', parsed.lat);
+                                updateBooking(b.id, 'lng', parsed.lng);
+                              } else if (parsed.isShortLink) {
+                                alert('Short Google Maps link saved — but exact GPS coords couldn\'t be extracted.\n\nTIP: For precise pinning, open the link in Google Maps → long-press the pin → copy the coordinates → paste again.');
+                              }
+                            } catch (err) {
+                              alert('Could not read clipboard. Browser may be blocking it — try copying the text and pasting manually in the location field.');
+                            }
+                          }}
+                          style={{ padding: '6px 8px', background: '#25D366', borderColor: '#25D366', color: 'white' }}
+                        >
+                          📱
+                        </button>
                         <button className="btn btn-sm" title={b.lat ? `Pinned at ${b.lat.toFixed(4)}, ${b.lng.toFixed(4)}` : 'Pin location on map'} onClick={() => setBookingPinFor(b.id)} style={{ padding: '6px 8px', background: b.lat ? colors.accentLight : 'white', borderColor: b.lat ? colors.accent : colors.border }}>
                           <MapPin size={14} style={{ color: b.lat ? colors.accent : colors.ink + '99' }} />
                         </button>
@@ -1872,7 +1917,22 @@ function FastBookingModal({ clients, saveClients, allCleaners, addBooking, booki
             </label>
             <label style={{ display: 'block', marginBottom: '18px' }}>
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Address / Location</div>
-              <input type="text" value={newClient.location} onChange={e => setNewClient({ ...newClient, location: e.target.value })} placeholder="e.g. Apt 505, Marina Tower, Corniche" style={{ width: '100%', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px' }} />
+              <input
+                type="text"
+                value={newClient.location}
+                onChange={e => setNewClient({ ...newClient, location: e.target.value })}
+                onPaste={e => {
+                  const pasted = e.clipboardData?.getData('text') || '';
+                  if (!pasted) return;
+                  const parsed = parseLocationInput(pasted);
+                  if (parsed.lat && parsed.lng) {
+                    e.preventDefault();
+                    setNewClient({ ...newClient, location: parsed.address, lat: parsed.lat, lng: parsed.lng });
+                  }
+                }}
+                placeholder="e.g. Apt 505, Marina Tower, Corniche (or paste Google Maps link)"
+                style={{ width: '100%', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px' }}
+              />
             </label>
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between' }}>
               <button onClick={() => setStep('search')} style={{ padding: '10px 18px', border: `1px solid ${colors.border}`, background: 'white', borderRadius: '8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>← Back</button>
@@ -3121,7 +3181,79 @@ function ReportView({ bookingsWithCalc, date, formatDate, colors, totalRevenue, 
 
 
 
-function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, saveCleanerHomes, officeAddress, saveOfficeAddress, CLEANER_COLORS, CLEANERS, updateBooking }) {
+// Compact driver-link card shown at the top of the admin Driver tab.
+// Mirrors the driver section in StaffLinksView but inlined here for one-click sharing.
+// The driver bookmarks this URL on his phone and taps it each day for his schedule.
+function DriverLinkBox({ companyInfo, saveCompanyInfo, colors }) {
+  const [copied, setCopied] = useState(false);
+  const randCode = () => Math.random().toString(36).slice(2, 6);
+  const driverCode = companyInfo?.driverUrlCode || '';
+  const baseUrl = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '';
+  const driverUrl = driverCode ? `${baseUrl}#/driver-${driverCode}` : '';
+
+  const generate = () => {
+    saveCompanyInfo({ ...(companyInfo || {}), driverUrlCode: randCode() });
+  };
+  const regenerate = () => {
+    if (!confirm('Regenerate the driver link? The old link will stop working.')) return;
+    saveCompanyInfo({ ...(companyInfo || {}), driverUrlCode: randCode() });
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(driverUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) { alert('Could not copy. Long-press the URL and copy manually.'); }
+  };
+  const shareWhatsApp = () => {
+    const message = `Hi! 👋\n\nHere's your personal driver schedule link. Bookmark it on your phone — tap it every morning to see your pickups, drops, and all stops for the day.\n\n${driverUrl}\n\n— ${companyInfo?.name || 'AR Cleaning Services'}`;
+    let digits = String(companyInfo?.driverPhone || '').replace(/[^\d]/g, '');
+    if (digits.startsWith('00')) digits = digits.slice(2);
+    if (digits.startsWith('0')) digits = '971' + digits.slice(1);
+    if (!digits.startsWith('971') && digits.length <= 9) digits = '971' + digits;
+    const waUrl = digits ? `https://wa.me/${digits}?text=${encodeURIComponent(message)}` : `https://wa.me/?text=${encodeURIComponent(message)}`;
+    window.open(waUrl, '_blank');
+  };
+
+  return (
+    <div style={{ background: 'white', border: `1.5px solid ${colors.accent}`, borderRadius: '10px', padding: '12px 14px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+        <span style={{ fontSize: '20px' }}>🚐</span>
+        <div>
+          <div style={{ fontSize: '11px', color: colors.ink + '99', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Driver's Link</div>
+          <div style={{ fontSize: '12px', color: colors.ink + '77' }}>Share with your driver — he bookmarks it on his phone</div>
+        </div>
+      </div>
+      {driverUrl ? (
+        <>
+          <div className="mono" style={{ flex: '1 1 200px', padding: '6px 10px', background: colors.soft, borderRadius: '6px', fontSize: '11px', wordBreak: 'break-all', border: `1px solid ${colors.border}`, minWidth: 0 }}>
+            {driverUrl}
+          </div>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <button className="btn btn-sm" onClick={copy} style={{ fontSize: '12px' }}>
+              {copied ? '✓ Copied!' : '📋 Copy'}
+            </button>
+            <button className="btn btn-sm" onClick={() => window.open(driverUrl, '_blank')} style={{ fontSize: '12px' }}>
+              👁 Preview
+            </button>
+            <button className="btn btn-sm" onClick={shareWhatsApp} style={{ fontSize: '12px', background: '#25D366', color: 'white', borderColor: '#25D366' }}>
+              <MessageCircle size={12} /> WhatsApp
+            </button>
+            <button className="btn btn-sm" onClick={regenerate} style={{ fontSize: '12px' }} title="Create a new URL (old one stops working)">
+              <RefreshCw size={12} />
+            </button>
+          </div>
+        </>
+      ) : (
+        <button className="btn btn-primary btn-sm" onClick={generate} style={{ fontSize: '13px' }}>
+          <Plus size={14} /> Generate Driver Link
+        </button>
+      )}
+    </div>
+  );
+}
+
+function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, saveCleanerHomes, officeAddress, saveOfficeAddress, CLEANER_COLORS, CLEANERS, updateBooking, companyInfo, saveCompanyInfo }) {
   const [showSetup, setShowSetup] = React.useState(false);
   const mapRef = React.useRef(null);
   const mapInstanceRef = React.useRef(null);
@@ -3166,57 +3298,99 @@ function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, 
     cleanerBookings[b.cleaner].push(b);
   });
 
+  // Build the full driver run as explicit sequential events.
+  //   PICKUP   = pick up cleaner from home or office at START of day (one per cleaner)
+  //   DROP     = drop cleaner at a job location (one per job)
+  //   COLLECT  = pick up cleaner from her previous job to take to next (between jobs)
+  //   RETURN   = return cleaner home / to office at end of day (one per cleaner)
+  // This matches the user's workflow: she wants to see "collect Zainab from Sudhi Dental"
+  // as its own line, not just as a subtle "From:" note on the next drop.
   const runEvents = [];
-  // Iterate every cleaner that has at least one booking today (not just the roster)
   const allCleanersWithJobs = Object.keys(cleanerBookings).filter(c => cleanerBookings[c].length > 0);
   allCleanersWithJobs.forEach(cleaner => {
     const jobs = cleanerBookings[cleaner].sort((a, b) => parseStartTime(a.timing) - parseStartTime(b.timing));
     if (jobs.length === 0) return;
     jobs.forEach((job, idx) => {
-      // Pickup origin
-      let originLabel, originAddress;
+      const jobStart = parseStartTime(job.timing);
+      const prevJob = idx > 0 ? jobs[idx - 1] : null;
+      const prevJobEnd = prevJob ? parseEndTime(prevJob.timing) : null;
+
+      // === Step 1: Pickup or Collect BEFORE this drop ===
       if (idx === 0) {
-        // First job — pickup from home or office based on booking
-        if (job.pickupType === 'HOME') {
-          originLabel = `${cleaner}'s home`;
-          originAddress = cleanerHomes[cleaner]?.address || `${cleaner}'s home address (not set)`;
-        } else {
-          originLabel = 'Office';
-          originAddress = officeAddress.address;
-        }
+        // First job of the day: PICKUP from home or office
+        const useHome = job.pickupType === 'HOME';
+        runEvents.push({
+          type: 'PICKUP',
+          time: jobStart - 0.001, // just before the drop at same time
+          timeLabel: job.timing.split('-')[0] || job.timing,
+          cleaner,
+          fromLabel: useHome ? `${cleaner}'s home` : 'Office',
+          fromAddress: useHome ? (cleanerHomes[cleaner]?.address || `${cleaner}'s home address (not set)`) : officeAddress.address,
+          fromLat: useHome ? cleanerHomes[cleaner]?.lat : officeAddress?.lat,
+          fromLng: useHome ? cleanerHomes[cleaner]?.lng : officeAddress?.lng,
+          bookingId: job.id,
+          lat: useHome ? cleanerHomes[cleaner]?.lat : officeAddress?.lat,
+          lng: useHome ? cleanerHomes[cleaner]?.lng : officeAddress?.lng,
+          location: useHome ? (cleanerHomes[cleaner]?.address || 'Home') : officeAddress.address,
+          phone: '',
+        });
       } else {
-        // Subsequent job — coming from previous job location
-        originLabel = `${cleaner} from ${jobs[idx - 1].clientName}`;
-        originAddress = jobs[idx - 1].location;
+        // Subsequent job: COLLECT from the previous job's location
+        runEvents.push({
+          type: 'COLLECT',
+          time: prevJobEnd, // collect at end of previous job
+          timeLabel: prevJob.timing.split('-')[1] || '',
+          cleaner,
+          fromClient: prevJob.clientName,
+          fromLabel: `${cleaner} from ${prevJob.clientName}`,
+          fromAddress: prevJob.location,
+          fromLat: prevJob.lat,
+          fromLng: prevJob.lng,
+          bookingId: prevJob.id,
+          lat: prevJob.lat,
+          lng: prevJob.lng,
+          location: prevJob.location,
+          phone: prevJob.phone,
+        });
       }
+
+      // === Step 2: DROP at this job location ===
       runEvents.push({
         type: 'DROP',
-        time: parseStartTime(job.timing),
+        time: jobStart,
         timeLabel: job.timing.split('-')[0] || job.timing,
         cleaner,
         clientName: job.clientName,
         location: job.location,
         phone: job.phone,
-        originLabel,
-        originAddress,
+        originLabel: idx === 0
+          ? (job.pickupType === 'HOME' ? `${cleaner}'s home` : 'Office')
+          : `${cleaner} from ${jobs[idx - 1].clientName}`,
+        originAddress: idx === 0
+          ? (job.pickupType === 'HOME' ? (cleanerHomes[cleaner]?.address || '') : officeAddress.address)
+          : jobs[idx - 1].location,
         bookingId: job.id,
         lat: job.lat,
-        lng: job.lng
+        lng: job.lng,
       });
     });
-    // End-of-day pickup
+
+    // === Step 3: End-of-day RETURN pickup from last job ===
     const lastJob = jobs[jobs.length - 1];
     runEvents.push({
-      type: 'PICKUP',
-      time: parseEndTime(lastJob.timing) + 0.001, // tiny offset for sort stability
+      type: 'RETURN',
+      time: parseEndTime(lastJob.timing) + 0.001,
       timeLabel: lastJob.timing.split('-')[1] || '',
       cleaner,
-      clientName: lastJob.clientName,
+      fromClient: lastJob.clientName,
+      fromLabel: `${cleaner} from ${lastJob.clientName}`,
+      fromAddress: lastJob.location,
+      clientName: lastJob.clientName, // for backwards compat with existing UI
       location: lastJob.location,
       phone: lastJob.phone,
       bookingId: lastJob.id,
       lat: lastJob.lat,
-      lng: lastJob.lng
+      lng: lastJob.lng,
     });
   });
   runEvents.sort((a, b) => a.time - b.time);
@@ -3227,7 +3401,12 @@ function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, 
     return `${h}:${m.toString().padStart(2, '0')}`;
   };
 
-  const openInGoogleMaps = (location) => {
+  const openInGoogleMaps = (location, lat, lng) => {
+    // If we have precise GPS coordinates, use them (opens Google Maps directly at the pin)
+    if (lat && lng) {
+      window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`, '_blank');
+      return;
+    }
     const q = encodeURIComponent(location + ', Abu Dhabi, UAE');
     window.open(`https://www.google.com/maps/search/?api=1&query=${q}`, '_blank');
   };
@@ -3404,6 +3583,9 @@ function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, 
         </div>
       )}
 
+      {/* Driver's shareable link — the driver bookmarks this on his phone and taps it each day */}
+      <DriverLinkBox companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />
+
       {bookingsWithCalc.length === 0 ? (
         <div style={{ background: 'white', borderRadius: '12px', border: `1px dashed ${colors.border}`, padding: '60px 20px', textAlign: 'center', color: colors.ink + '99' }}>
           <Truck size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
@@ -3446,7 +3628,30 @@ function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, 
             <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
               {runEvents.map((event, idx) => {
                 const color = CLEANER_COLORS[event.cleaner] || '#0F4C3A';
-                const isPickup = event.type === 'PICKUP';
+                // Visual styling for each of the 4 event types
+                const typeConfig = event.type === 'PICKUP'
+                  ? { badge: '🧍 PICKUP', bg: '#FEF3C7', badgeBg: '#F59E0B', badgeColor: 'white', rowBg: '#FFF8E7' }
+                  : event.type === 'COLLECT'
+                  ? { badge: '🔄 COLLECT', bg: '#FED7AA', badgeBg: '#D97706', badgeColor: 'white', rowBg: '#FFF4E6' }
+                  : event.type === 'RETURN'
+                  ? { badge: '🏠 RETURN', bg: '#E0E7FF', badgeBg: '#6366F1', badgeColor: 'white', rowBg: '#F0F0FF' }
+                  : { badge: '📍 DROP', bg: color, badgeBg: color, badgeColor: 'white', rowBg: 'white' };
+                // "From" and "To" labels per event type
+                const fromText = event.type === 'PICKUP' || event.type === 'COLLECT' || event.type === 'RETURN'
+                  ? event.fromLabel
+                  : event.originLabel;
+                const fromAddress = event.type === 'PICKUP' || event.type === 'COLLECT' || event.type === 'RETURN'
+                  ? event.fromAddress
+                  : event.originAddress;
+                const toText = event.type === 'DROP'
+                  ? event.clientName
+                  : event.type === 'RETURN'
+                  ? 'Office / home'
+                  : null; // PICKUP and COLLECT don't need "to" — the next DROP row shows it
+                // Navigation destination = where the driver is heading NOW
+                const navAddress = event.location;
+                const navLat = event.lat;
+                const navLng = event.lng;
                 return (
                   <div key={idx} style={{
                     padding: '12px 16px',
@@ -3454,7 +3659,7 @@ function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, 
                     display: 'flex',
                     gap: '12px',
                     alignItems: 'flex-start',
-                    background: isPickup ? '#FFF8E7' : 'white'
+                    background: typeConfig.rowBg
                   }}>
                     <div style={{
                       flexShrink: 0,
@@ -3477,39 +3682,43 @@ function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, 
                       minHeight: '40px'
                     }}></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px', flexWrap: 'wrap' }}>
                         <span style={{
-                          padding: '1px 8px',
+                          padding: '2px 8px',
                           borderRadius: '10px',
-                          background: isPickup ? '#FEF3C7' : color,
-                          color: isPickup ? colors.warning : 'white',
+                          background: typeConfig.badgeBg,
+                          color: typeConfig.badgeColor,
                           fontSize: '10px',
                           fontWeight: 700,
-                          textTransform: 'uppercase'
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.03em'
                         }}>
-                          {isPickup ? '🔄 Collect' : '📍 Drop'}
+                          {typeConfig.badge}
                         </span>
                         <span style={{ fontWeight: 700, fontSize: '14px', color }}>{event.cleaner}</span>
                       </div>
-                      {!isPickup && (
+                      {/* FROM line - where the cleaner is being collected from */}
+                      {fromText && (
                         <div style={{ fontSize: '12px', color: colors.ink + '99', marginBottom: '3px' }}>
-                          From: <strong>{event.originLabel}</strong>
-                          {event.originAddress && event.originAddress !== event.originLabel && (
-                            <span style={{ color: colors.ink + '77' }}> · {event.originAddress}</span>
+                          From: <strong>{fromText}</strong>
+                          {fromAddress && fromAddress !== fromText && (
+                            <span style={{ color: colors.ink + '77' }}> · {fromAddress}</span>
                           )}
                         </div>
                       )}
-                      <div style={{ fontWeight: 600, fontSize: '13px' }}>
-                        {isPickup ? 'Pick up from: ' : 'To: '}
-                        {event.clientName}
-                      </div>
-                      <div style={{ fontSize: '12px', color: colors.ink + 'AA', margin: '2px 0' }}>{event.location}</div>
+                      {/* TO line - where the cleaner is being dropped off */}
+                      {toText && (
+                        <div style={{ fontWeight: 600, fontSize: '13px' }}>
+                          To: <strong>{toText}</strong>
+                        </div>
+                      )}
+                      <div style={{ fontSize: '12px', color: colors.ink + 'AA', margin: '2px 0' }}>{navAddress}</div>
                       {event.phone && (
                         <div style={{ fontSize: '11px', color: colors.ink + '99', display: 'inline-flex', alignItems: 'center', gap: '4px', marginRight: '10px' }}>
                           <Phone size={11} /> <a href={`tel:${event.phone}`} style={{ color: colors.ink + '99', textDecoration: 'none' }}>{event.phone}</a>
                         </div>
                       )}
-                      <button className="btn btn-sm" style={{ marginTop: '4px', padding: '4px 8px', fontSize: '11px' }} onClick={() => openInGoogleMaps(event.location)}>
+                      <button className="btn btn-sm" style={{ marginTop: '4px', padding: '4px 8px', fontSize: '11px' }} onClick={() => openInGoogleMaps(navAddress, navLat, navLng)}>
                         <Navigation size={11} /> Open in Maps
                       </button>
                     </div>
@@ -6529,6 +6738,70 @@ function SummaryBox({ label, value, colors, highlight, warning }) {
 // Helper: slug a cleaner name for URLs (e.g. "Leah" → "leah", "Al Mas" → "al-mas")
 const slugifyName = (name) => (name || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
+// Parse any location input (coords, Google Maps link, short link, plain address)
+// and extract { lat, lng, address } where possible. Returns { lat: null, lng: null, address: input }
+// if no coords can be extracted — in that case we still save the input as the address text.
+//
+// Supported formats (in order of detection):
+//   1. "24.4539, 54.3773"              → coords
+//   2. "lat:24.4539 lng:54.3773"       → coords
+//   3. google.com/maps/.../@24.45,54.37,15z/...  → coords from @-pattern
+//   4. google.com/maps?q=24.45,54.37             → coords from q-param
+//   5. maps.google.com/?ll=24.45,54.37           → coords from ll-param
+//   6. https://maps.app.goo.gl/XXXX    → short link (can't resolve in browser, save as-is)
+//   7. Plain address text              → save as address, no coords
+const parseLocationInput = (raw) => {
+  if (!raw) return { lat: null, lng: null, address: '' };
+  const input = String(raw).trim();
+  // Shorthand helper for finding valid lat/lng in a string
+  const extractCoords = (text) => {
+    // Match two decimal numbers separated by comma or space, possibly with lat:/lng: labels
+    const patterns = [
+      /@(-?\d+\.\d+),(-?\d+\.\d+)/,                    // Google Maps /@lat,lng
+      /[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/,               // ?q=lat,lng
+      /[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/,              // ?ll=lat,lng
+      /[?&]destination=(-?\d+\.\d+),(-?\d+\.\d+)/,     // ?destination=lat,lng
+      /lat[:\s=]+(-?\d+\.\d+).*?lng[:\s=]+(-?\d+\.\d+)/i,
+      /^(-?\d{1,3}\.\d{3,}),?\s+(-?\d{1,3}\.\d{3,})$/, // bare "lat, lng"
+    ];
+    for (const re of patterns) {
+      const m = text.match(re);
+      if (m) {
+        const lat = parseFloat(m[1]);
+        const lng = parseFloat(m[2]);
+        // Basic sanity check: UAE roughly between lat 22-26 and lng 51-57
+        if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+          return { lat, lng };
+        }
+      }
+    }
+    return null;
+  };
+
+  const coords = extractCoords(input);
+  if (coords) {
+    // Try to pull a human-readable name out of the URL path too (for google maps place links)
+    let address = input;
+    const placeMatch = input.match(/\/place\/([^/@]+)/);
+    if (placeMatch) {
+      address = decodeURIComponent(placeMatch[1]).replace(/\+/g, ' ');
+    } else if (/^-?\d/.test(input)) {
+      // Input was just bare coords — show them as the address
+      address = `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`;
+    }
+    return { lat: coords.lat, lng: coords.lng, address };
+  }
+
+  // Short links (maps.app.goo.gl, goo.gl/maps) — can't resolve in the browser due to CORS.
+  // Save as-is: the driver's Maps button will still open the link in Google Maps.
+  if (/maps\.app\.goo\.gl|goo\.gl\/maps/.test(input)) {
+    return { lat: null, lng: null, address: input, isShortLink: true };
+  }
+
+  // Plain address — save as-is, no coords
+  return { lat: null, lng: null, address: input };
+};
+
 // Haversine distance between two GPS points, in kilometers (straight-line).
 // Not perfectly accurate for driving but good enough to spot inefficient routes
 // and flag long legs. Zero if either coord is missing.
@@ -7299,7 +7572,7 @@ function StaffLinksView({ allCleaners, cleanerProfiles, saveCleanerProfiles, com
                 </>
               ) : (
                 <button className="btn btn-primary btn-sm" onClick={() => ensureCleanerHasCode(name)} style={{ fontSize: '12px', width: '100%' }}>
-                  <Plus size={12} /> Generate Link for {name}
+                  <Plus size={12} /> Generatafor {name}
                 </button>
               )}
             </div>
