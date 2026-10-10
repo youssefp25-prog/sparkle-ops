@@ -71,10 +71,8 @@ const emptyClient = () => ({
 const emptyContract = () => ({
   id: 'k_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
   clientId: null, clientName: '',
-  // Multi-cleaner support: `cleaners` is an array (new). The old `cleaner` field (single
-  // name) is kept for backward compat with existing records in Supabase & localStorage.
-  // On read we migrate single → array via normalizeContract(). On write both are kept
-  // in sync so screens that still read .cleaner continue working.
+  // Multi-cleaner: `cleaners` is an array (new field). Old `cleaner` single field
+  // is kept in sync for backward compat with every screen that still reads it.
   cleaner: 'Leah',
   cleaners: ['Leah'],
   daysOfWeek: [], timing: '',
@@ -82,8 +80,8 @@ const emptyContract = () => ({
   startDate: new Date().toISOString().split('T')[0]
 });
 
-// Normalize any contract record so `cleaners` is always an array.
-// Older contracts only have `cleaner` (string); we auto-upgrade on read.
+// Normalize any contract so `cleaners` is always an array of 1+ names.
+// Older contracts only have the string `cleaner`; auto-upgrade on read.
 const normalizeContract = (c) => {
   if (!c) return c;
   if (Array.isArray(c.cleaners) && c.cleaners.length > 0) {
@@ -171,7 +169,6 @@ export default function CleaningApp() {
         if (clientsRaw) setClients(JSON.parse(clientsRaw));
         const contractsRaw = localStorage.getItem('sparkle_contracts');
         if (contractsRaw) {
-          // Migrate every contract to have a `cleaners` array (multi-cleaner support)
           const parsed = JSON.parse(contractsRaw);
           setContracts(Array.isArray(parsed) ? parsed.map(normalizeContract) : []);
         }
@@ -443,8 +440,8 @@ export default function CleaningApp() {
         const rows = next.map(c => ({
           id: c.id, client_id: c.clientId, client_name: c.clientName,
           // Save BOTH: `cleaner` (string, primary) for backward compat with existing Supabase schema,
-          // and `cleaners` (JSON array) for the new multi-cleaner feature.
-          // If the `contracts` table doesn't have a `cleaners` column yet, Supabase ignores the key.
+          // and `cleaners` (JSON array) for the multi-cleaner feature.
+          // If the `contracts` table doesn't yet have a `cleaners` column, Supabase ignores that key.
           // To make team contracts sync across devices, run once in Supabase SQL Editor:
           //   ALTER TABLE contracts ADD COLUMN IF NOT EXISTS cleaners jsonb;
           cleaner: c.cleaner,
@@ -611,10 +608,10 @@ export default function CleaningApp() {
     const dayOfWeek = new Date(date).getDay();
     const matching = contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek));
     if (matching.length === 0) { showStatus('No contracts for this day'); return; }
-    // Multi-cleaner: a contract may have 2+ cleaners (team contracts). We generate
-    // ONE booking per (clientId + cleaner) pair so each cleaner has her own row for
-    // payroll/deployment. The duplicate check also uses (clientId + cleaner) so
-    // re-running Auto-fill is safe and never creates duplicates.
+    // Multi-cleaner: a contract may have 2+ cleaners (team contracts). Generate ONE
+    // booking per (clientId + cleaner) so each cleaner has her own row for payroll /
+    // deployment / earnings. Dedupe key is also (clientId + cleaner) so re-running
+    // Auto-fill is safe — never creates duplicates.
     const existingPairs = new Set(
       bookings.filter(b => b.clientId && b.cleaner).map(b => `${b.clientId}::${b.cleaner}`)
     );
@@ -948,7 +945,6 @@ export default function CleaningApp() {
     const headers = ['CLIENT', 'CLEANER(S)', 'DAYS', 'TIMING', 'RATE/HR', 'MAT.', 'PAYMENT', 'STATUS'];
     const rows = contracts.map(c => [
       c.clientName,
-      // Join all cleaners for team contracts: "Leah + Eva"
       (Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [c.cleaner].filter(Boolean)).join(' + '),
       c.daysOfWeek.map(d => DAYS[d]).join(', '),
       c.timing, Number(c.pricePerHour), c.withMaterials ? 'Yes' : 'No',
@@ -2260,13 +2256,11 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, al
     if (!editing.clientId) return alert('Pick a client');
     if (editing.daysOfWeek.length === 0) return alert('Pick at least one day');
     if (!editing.timing) return alert('Add timing');
-    // Must have at least one cleaner selected
     const cleaners = Array.isArray(editing.cleaners) && editing.cleaners.length > 0
       ? editing.cleaners
       : [editing.cleaner || 'Leah'];
     const client = clients.find(c => c.id === editing.clientId);
-    // Keep legacy `cleaner` field synced to the first entry so other screens that still
-    // read .cleaner (daily report, excel export, fallbacks) continue to work.
+    // Keep legacy `cleaner` field synced to the first entry for backward compat
     const final = {
       ...editing,
       clientName: client.name,
@@ -2283,7 +2277,7 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, al
     setEditing({ ...editing, daysOfWeek: has ? editing.daysOfWeek.filter(d => d !== dayIdx) : [...editing.daysOfWeek, dayIdx].sort() });
   };
 
-  // Toggle a cleaner on/off in the editing contract. Won't let you remove the last one.
+  // Toggle a cleaner on/off in the editing contract. At least one must remain.
   const toggleCleaner = (name) => {
     const current = Array.isArray(editing.cleaners) ? editing.cleaners : [editing.cleaner].filter(Boolean);
     const has = current.includes(name);
@@ -2332,7 +2326,7 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, al
                 {!c.active && <span className="badge" style={{ background: '#FEE2E2', color: colors.rust }}>PAUSED</span>}
               </div>
               <div style={{ fontSize: '12px', color: colors.ink + 'AA', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-                {/* Show all assigned cleaners; add TEAM badge when more than one */}
+                {/* Show all assigned cleaners with a TEAM badge when more than one */}
                 {(() => {
                   const list = Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [c.cleaner].filter(Boolean);
                   return (
@@ -2378,7 +2372,7 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, al
               </Field>
               {/* Multi-cleaner picker: tap chips to toggle each cleaner on/off.
                   For jobs where you send a TEAM of 2+ cleaners (big villas, deep cleans).
-                  Auto-fill will create one booking per cleaner so payroll/deployment track each separately. */}
+                  Auto-fill creates one booking per cleaner so payroll/deployment track each separately. */}
               <Field label={`Assigned Cleaner${(editing.cleaners || []).length > 1 ? 's' : ''} * — tap to add or remove`}>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '4px 0' }}>
                   {(() => {
@@ -7728,4 +7722,3 @@ function StaffLinksView({ allCleaners, cleanerProfiles, saveCleanerProfiles, com
     </div>
   );
 }
-
