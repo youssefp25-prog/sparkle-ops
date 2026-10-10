@@ -4456,11 +4456,12 @@ function InvoicePreviewModal({ items, client, companyInfo, saveCompanyInfo, peri
     }
   }, []);
 
-  const subtotal = items.reduce((s, b) => s + (b.total || 0), 0);
-  const totalHours = items.reduce((s, b) => s + (b.hours || 0), 0);
+  // Coerce to Number — guards against undefined/null/strings so .toFixed() never crashes
+  const subtotal = items.reduce((s, b) => s + (Number(b.total) || 0), 0);
+  const totalHours = items.reduce((s, b) => s + (Number(b.hours) || 0), 0);
   const today = new Date();
   const issueDate = today.toLocaleDateString('en-GB'); // dd/mm/yyyy
-  const isPaid = items.every(b => b.paymentStatus === 'PAID');
+  const isPaid = items.length > 0 && items.every(b => b.paymentStatus === 'PAID');
 
   const titleByMode = {
     monthly: `MONTHLY SERVICE FOR ${periodLabel.toUpperCase()}`,
@@ -4522,15 +4523,19 @@ function InvoicePreviewModal({ items, client, companyInfo, saveCompanyInfo, peri
   // NOTE: We parse the day directly from the 'YYYY-MM-DD' string (not via `new Date()`),
   // because `new Date("2026-07-31").getDate()` returns 30 in UTC+4 zones like Abu Dhabi —
   // that's the bug that caused invoices to show only 30 days for July, August, etc.
+  // Build line items — one row per booking.
+  // IMPORTANT: coerce every numeric field to a Number with a 0 fallback, because
+  // calling `.toFixed()` on `undefined`/`null`/`NaN` crashes React and blanks the app.
+  // We saw this with a client's invoice where one booking had an empty hours field.
   const lineItems = items.map(b => ({
     description: titleByMode[mode],
     date: b.date ? parseInt(b.date.slice(8, 10), 10) : '',
     timing: b.timing || '',
-    hours: b.hours,
-    rate: b.pricePerHour,
+    hours: Number(b.hours) || 0,
+    rate: Number(b.pricePerHour) || 0,
     materials: b.withMaterials ? 'Yes' : '',
-    cleaner: b.cleaner,
-    amount: b.total
+    cleaner: b.cleaner || '',
+    amount: Number(b.total) || 0,
   }));
 
   // Detect if this invoice has multiple cleaners (show "Cleaner" column)
@@ -4699,9 +4704,9 @@ function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineIte
                 <td style={{ padding: '9px 8px', textAlign: 'center', verticalAlign: 'top' }}>{item.date}</td>
                 {showCleanerColumn && <td style={{ padding: '9px 8px', textAlign: 'center', verticalAlign: 'top' }}>{item.cleaner}</td>}
                 {mode === 'booking' && <td style={{ padding: '9px 8px', textAlign: 'center', verticalAlign: 'top', fontFamily: 'monospace', fontSize: '11px' }}>{item.timing}</td>}
-                <td style={{ padding: '9px 8px', textAlign: 'center', verticalAlign: 'top' }}>{item.hours.toFixed(1)}</td>
-                <td style={{ padding: '9px 8px', textAlign: 'center', verticalAlign: 'top' }}>{item.rate.toFixed(2)}</td>
-                <td style={{ padding: '9px 8px', textAlign: 'right', verticalAlign: 'top' }}>{item.amount.toFixed(2)}</td>
+                <td style={{ padding: '9px 8px', textAlign: 'center', verticalAlign: 'top' }}>{(Number(item.hours) || 0).toFixed(1)}</td>
+                <td style={{ padding: '9px 8px', textAlign: 'center', verticalAlign: 'top' }}>{(Number(item.rate) || 0).toFixed(2)}</td>
+                <td style={{ padding: '9px 8px', textAlign: 'right', verticalAlign: 'top' }}>{(Number(item.amount) || 0).toFixed(2)}</td>
               </tr>
             ))}
           </tbody>
@@ -4713,11 +4718,11 @@ function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineIte
         {/* ============ TOTAL DUE (right-aligned, brand blue) ============ */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
           <div style={{ fontSize: '12px', color: brand.mutedText }}>
-            Total hours: <strong style={{ color: brand.darkText, fontFamily: 'Arial, sans-serif' }}>{totalHours.toFixed(1)}</strong>
+            Total hours: <strong style={{ color: brand.darkText, fontFamily: 'Arial, sans-serif' }}>{(Number(totalHours) || 0).toFixed(1)}</strong>
           </div>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: '11px', color: brand.labelGrey, textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>Total Due</div>
-            <div style={{ fontSize: '26px', fontWeight: 800, color: brand.midBlue, marginTop: '3px', fontFamily: 'Arial, sans-serif' }}>AED {subtotal.toFixed(2)}</div>
+            <div style={{ fontSize: '26px', fontWeight: 800, color: brand.midBlue, marginTop: '3px', fontFamily: 'Arial, sans-serif' }}>AED {(Number(subtotal) || 0).toFixed(2)}</div>
           </div>
         </div>
 
@@ -7572,7 +7577,7 @@ function StaffLinksView({ allCleaners, cleanerProfiles, saveCleanerProfiles, com
                 </>
               ) : (
                 <button className="btn btn-primary btn-sm" onClick={() => ensureCleanerHasCode(name)} style={{ fontSize: '12px', width: '100%' }}>
-                  <Plus size={12} /> Generatafor {name}
+                  <Plus size={12} /> Generate Link for {name}
                 </button>
               )}
             </div>
