@@ -3872,34 +3872,100 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
   // the full roster. We also render a friendly "no bookings" message below.
   const hasAnyBookings = activeCleaners.length > 0;
   const displayCleaners = hasAnyBookings ? activeCleaners : CLEANERS;
-  const maxJobs = Math.max(1, ...displayCleaners.map(c => (byCleaner[c] || []).length));
+
+  // ===== TIME SLOT GROUPING =====
+  // Place each booking into one of 4 time slots based on its START time.
+  //  Slot 1: 07:00 – 11:00
+  //  Slot 2: 11:00 – 14:00
+  //  Slot 3: 14:00 – 17:00
+  //  Slot 4: 17:00 – midnight
+  const SLOTS = [
+    { num: 1, label: '7am – 11am',  minStart: 7 * 60,  maxStart: 11 * 60 },
+    { num: 2, label: '11am – 2pm',  minStart: 11 * 60, maxStart: 14 * 60 },
+    { num: 3, label: '2pm – 5pm',   minStart: 14 * 60, maxStart: 17 * 60 },
+    { num: 4, label: '5pm – 12am',  minStart: 17 * 60, maxStart: 24 * 60 },
+  ];
+  const slotForJob = (job) => {
+    const parsed = parseTimingToMinutes(job.timing);
+    if (!parsed) return 1; // fallback: morning slot
+    const start = parsed.start;
+    // early-morning (before 7) → slot 1; after midnight unlikely → slot 4
+    if (start < SLOTS[0].maxStart) return 1;
+    if (start < SLOTS[1].maxStart) return 2;
+    if (start < SLOTS[2].maxStart) return 3;
+    return 4;
+  };
+  // Build { cleaner: { 1: [jobs], 2: [jobs], 3: [jobs], 4: [jobs] } }
+  const bySlot = {};
+  displayCleaners.forEach(c => {
+    bySlot[c] = { 1: [], 2: [], 3: [], 4: [] };
+    (byCleaner[c] || []).forEach(j => {
+      bySlot[c][slotForJob(j)].push(j);
+    });
+    // Sort each slot by start time for readability
+    [1, 2, 3, 4].forEach(s => {
+      bySlot[c][s].sort((a, b) => {
+        const pa = parseTimingToMinutes(a.timing); const pb = parseTimingToMinutes(b.timing);
+        return (pa ? pa.start : 0) - (pb ? pb.start : 0);
+      });
+    });
+  });
 
   return (
     <div>
       <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <div>
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Deployment Schedule</h2>
-          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Print-ready grid by cleaner</p>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Print-ready grid by cleaner · 4 time slots (morning / midday / afternoon / evening)</p>
         </div>
         <button className="btn btn-primary" onClick={printPage}><Printer size={14} /> Print</button>
       </div>
       <div style={{ background: 'white', padding: '24px', borderRadius: '8px', border: `1px solid ${colors.border}` }}>
         <div style={{ background: colors.headerGreen, color: 'white', textAlign: 'center', padding: '14px', fontSize: '20px', fontWeight: 700, fontFamily: 'Fraunces, serif', border: `2px solid ${colors.ink}`, borderBottom: 'none' }}>Deployment — {formatDate(date)}</div>
         <table className="grid-table">
-          <thead><tr>{displayCleaners.map(c => <th key={c} className="display-font">{c}</th>)}</tr></thead>
+          <thead>
+            <tr>
+              <th className="display-font" style={{ width: '52px', background: colors.headerGreen, color: 'white', fontSize: '12px' }}>Slot</th>
+              {displayCleaners.map(c => <th key={c} className="display-font">{c}</th>)}
+            </tr>
+          </thead>
           <tbody>
-            {Array.from({ length: maxJobs }).map((_, rowIdx) => (
-              <tr key={rowIdx}>
+            {SLOTS.map(slot => (
+              <tr key={slot.num}>
+                {/* Left-edge slot label — big "1 / 2 / 3 / 4" with time range */}
+                <td style={{
+                  border: `1px solid ${colors.ink}`,
+                  background: colors.headerGreen,
+                  color: 'white',
+                  textAlign: 'center',
+                  verticalAlign: 'middle',
+                  padding: '8px 4px',
+                  minWidth: '48px',
+                }}>
+                  <div className="display-font" style={{ fontSize: '26px', fontWeight: 800, lineHeight: 1 }}>{slot.num}</div>
+                  <div style={{ fontSize: '9px', opacity: 0.9, marginTop: '4px', lineHeight: 1.2 }}>{slot.label}</div>
+                </td>
                 {displayCleaners.map(cleaner => {
-                  const job = (byCleaner[cleaner] || [])[rowIdx];
-                  if (!job) return <td key={cleaner} className="deployment-cell" style={{ background: '#fafafa' }}></td>;
+                  const jobs = bySlot[cleaner][slot.num] || [];
+                  if (jobs.length === 0) {
+                    return <td key={cleaner} className="deployment-cell" style={{ background: '#fafafa' }}></td>;
+                  }
+                  // Multiple jobs in the same slot stack vertically with a thin divider
+                  const anyMaterials = jobs.some(j => j.withMaterials);
                   return (
-                    <td key={cleaner} className="deployment-cell" style={{ background: job.withMaterials ? colors.cellMaterials : 'white' }}>
-                      <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '3px' }}>{job.clientName}</div>
-                      <div style={{ fontSize: '11px', lineHeight: '1.4' }}>{job.location}</div>
-                      {job.withMaterials && <div style={{ fontSize: '10px', color: colors.accent, fontWeight: 700, marginTop: '3px' }}>w/ materials</div>}
-                      <div className="mono" style={{ fontSize: '12px', fontWeight: 600, marginTop: '4px' }}>{job.timing}</div>
-                      <div className="mono" style={{ fontSize: '12px', fontWeight: 700, color: colors.priceRed, marginTop: '3px' }}>({job.total.toFixed(0)} AED/{job.paymentType === 'CASH' ? 'C' : 'O'})</div>
+                    <td key={cleaner} className="deployment-cell" style={{ background: anyMaterials ? colors.cellMaterials : 'white', padding: '6px 6px' }}>
+                      {jobs.map((job, idx) => (
+                        <div key={idx} style={{
+                          padding: idx === 0 ? '0 0 6px 0' : '6px 0',
+                          borderTop: idx > 0 ? `1px dashed ${colors.ink}44` : 'none',
+                        }}>
+                          <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '3px' }}>{job.clientName}</div>
+                          <div style={{ fontSize: '11px', lineHeight: '1.4' }}>{job.location}</div>
+                          {job.withMaterials && <div style={{ fontSize: '10px', color: colors.accent, fontWeight: 700, marginTop: '3px' }}>w/ materials</div>}
+                          <div className="mono" style={{ fontSize: '12px', fontWeight: 600, marginTop: '4px' }}>{job.timing}</div>
+                          <div className="mono" style={{ fontSize: '12px', fontWeight: 700, color: colors.priceRed, marginTop: '3px' }}>({job.total.toFixed(0)} AED/{job.paymentType === 'CASH' ? 'C' : 'O'})</div>
+                        </div>
+                      ))}
                     </td>
                   );
                 })}
@@ -3915,9 +3981,10 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
             <div style={{ fontSize: '12px' }}>Add bookings in the <strong>Bookings</strong> tab, then they&apos;ll appear here grouped by cleaner.</div>
           </div>
         )}
-        <div style={{ marginTop: '16px', fontSize: '11px', color: colors.ink + '99', display: 'flex', gap: '20px' }}>
+        <div style={{ marginTop: '16px', fontSize: '11px', color: colors.ink + '99', display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
           <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: colors.cellMaterials, marginRight: '4px', verticalAlign: 'middle', border: '1px solid #ccc' }}></span> With materials</span>
           <span>O = Online · C = Cash</span>
+          <span><strong>1</strong> 7am–11am · <strong>2</strong> 11am–2pm · <strong>3</strong> 2pm–5pm · <strong>4</strong> 5pm–12am</span>
         </div>
       </div>
     </div>
