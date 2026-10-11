@@ -2195,7 +2195,7 @@ export default function CleaningApp() {
 
       <div style={{ padding: '32px', maxWidth: '1400px', margin: '0 auto' }}>
         {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} smartSuggestionsOff={smartSuggestionsOff} />}
-        {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} bookings={bookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} />}
+        {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
         {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
@@ -4110,7 +4110,7 @@ function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
 //   - 7-day forecast
 // Also includes a WhatsApp "Contact Client" quick-action.
 // =====================================================================
-function BookingPlanView({ recurringClients, savedDays, bookings, date, colors, clients, companyInfo, allCleaners, setView, setDate }) {
+function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, setBookings, date, colors, clients, companyInfo, allCleaners, setView, setDate, showStatus }) {
   const [targetDate, setTargetDate] = React.useState(date);
   const [search, setSearch] = React.useState('');
   React.useEffect(() => { setTargetDate(date); }, [date]);
@@ -4189,8 +4189,57 @@ function BookingPlanView({ recurringClients, savedDays, bookings, date, colors, 
     window.open(`https://wa.me/${digits}?text=${encodeURIComponent(msg)}`, '_blank');
   };
 
+  // CREATE A PRE-FILLED BOOKING FROM A PATTERN
+  // Finds matching client in the clients list (or creates a new ad-hoc entry), builds
+  // a complete booking row with cleaner/time/rate/materials/payment, pushes it into
+  // the current day's bookings (or the saved day if target != today), then jumps to
+  // the Bookings tab so the user can finalize + save.
   const goToBookings = (p) => {
-    // Jump to Bookings tab on the target date — the user can then add this booking manually
+    // 1. Try to match an existing client by name
+    const normalize = (s) => (s || '').trim().toLowerCase();
+    const existingClient = clients.find(c => normalize(c.name) === normalize(p.client_name));
+
+    // 2. Build the pre-filled booking row
+    const newBooking = {
+      id: 'b_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      clientId: existingClient?.id || null,
+      clientName: p.client_name,
+      phone: existingClient?.phone || '',
+      location: existingClient?.address || '',
+      lat: existingClient?.lat || null,
+      lng: existingClient?.lng || null,
+      cleaner: p.suggested_cleaner || 'Leah',
+      timing: p.suggested_time || '',
+      pricePerHour: p.rate_per_hour || 25,
+      withMaterials: !!p.with_materials,
+      paymentType: p.payment_type || 'ONLINE',
+      pickupType: 'OFFICE',
+      paymentStatus: 'PENDING',
+    };
+
+    // 3. Decide where it goes: current day (bookings state) vs. historical saved day
+    const currentDateStr = date;
+    if (targetDate === currentDateStr) {
+      // Add to today's current bookings (filter out any blank starter row)
+      const kept = bookings.filter(b => b.clientName || b.location || b.cleaner !== 'Leah' || b.timing);
+      setBookings([...kept, newBooking]);
+      showStatus && showStatus(`✓ Added ${p.client_name} to today's bookings`);
+    } else {
+      // Add to the saved day for the target date (or create it if it doesn't exist)
+      const existing = savedDays[targetDate]?.bookings || [];
+      const updated = {
+        ...savedDays,
+        [targetDate]: {
+          bookings: [...existing, newBooking],
+          savedAt: new Date().toISOString(),
+        },
+      };
+      setSavedDays(updated);
+      try { localStorage.setItem('sparkle_all_days', JSON.stringify(updated)); } catch (e) {}
+      showStatus && showStatus(`✓ Added ${p.client_name} to ${targetDate}`);
+    }
+
+    // 4. Jump to Bookings tab on the target date
     setDate(targetDate);
     setView('input');
   };
