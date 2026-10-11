@@ -244,6 +244,130 @@ const previewContractDates = (contract, nDates = 6) => {
   return results;
 };
 
+// =====================================================================
+// DAILY BOOKING SUGGESTION ENGINE
+// Matches a recurring_client pattern against a target date and returns
+// { match, confidence, status, reason }.
+// =====================================================================
+const DAY_NAME_TO_IDX = {
+  sunday: 0, sun: 0, monday: 1, mon: 1, tuesday: 2, tue: 2,
+  wednesday: 3, wed: 3, thursday: 4, thu: 4, friday: 5, fri: 5, saturday: 6, sat: 6,
+};
+const dayNameToIdx = (name) => {
+  if (!name) return null;
+  const key = String(name).toLowerCase().trim().split(/[\s(]/)[0];
+  return DAY_NAME_TO_IDX[key] ?? null;
+};
+const daysBetween = (a, b) => Math.round((new Date(a + 'T12:00:00') - new Date(b + 'T12:00:00')) / 86400000);
+
+// Returns { match: bool, status: '🟢 DUE TODAY'|'🟡 LIKELY DUE'|'🔴 OVERDUE'|'⚪ NOT DUE',
+//           confidence: 'HIGH'|'MEDIUM'|'LOW', reason: string }
+const matchPatternToDate = (pattern, targetDateStr, todayStr) => {
+  if (!pattern || !pattern.cadence) return { match: false, status: '⚪ NOT DUE', confidence: 'LOW', reason: 'Insufficient data' };
+  const target = new Date(targetDateStr + 'T12:00:00');
+  const targetDay = target.getDay();
+  const patternDay = pattern.day_of_week && pattern.day_of_week !== 'ALL DAYS' ? dayNameToIdx(pattern.day_of_week) : null;
+  const lastBooking = pattern.last_booking_date || null;
+  const timePct = pattern.time_pct || 0;
+  const cleanerPct = pattern.cleaner_pct || 0;
+  const strongHistory = cleanerPct >= 75 && timePct >= 60;
+  const baseConf = strongHistory ? 'HIGH' : (cleanerPct >= 40 ? 'MEDIUM' : 'LOW');
+
+  // ---------- DAILY ----------
+  if (pattern.cadence === 'DAILY') {
+    // Fire every day (except weekend-only if historical shows none). Default: due today.
+    if (!lastBooking) return { match: true, status: '🟢 DUE TODAY', confidence: 'HIGH', reason: `Daily client — no recent record` };
+    const since = daysBetween(targetDateStr, lastBooking);
+    if (since <= 0) return { match: false, status: '✅ BOOKED', confidence: baseConf, reason: `Already booked for this date` };
+    if (since === 1) return { match: true, status: '🟢 DUE TODAY', confidence: 'HIGH', reason: `Daily client — last visit yesterday` };
+    if (since <= 3) return { match: true, status: '🟢 DUE TODAY', confidence: 'HIGH', reason: `Daily client — ${since} days since last visit` };
+    if (since <= 7) return { match: true, status: '🔴 OVERDUE', confidence: 'HIGH', reason: `Daily client — ${since} days since last visit, overdue` };
+    return { match: true, status: '🔴 OVERDUE', confidence: 'HIGH', reason: `Daily client — ${since} days since last visit, LONG OVERDUE` };
+  }
+
+  // ---------- WEEKLY ----------
+  if (pattern.cadence === 'WEEKLY') {
+    if (patternDay === null) return { match: false, status: '⚪ NOT DUE', confidence: 'LOW', reason: 'Missing day of week' };
+    if (targetDay !== patternDay) return { match: false, status: '⚪ NOT DUE', confidence: baseConf, reason: `Weekly ${pattern.day_of_week} client — not their day` };
+    if (!lastBooking) return { match: true, status: '🟡 LIKELY DUE', confidence: baseConf, reason: `Weekly ${pattern.day_of_week} pattern — no recent record, but matches cycle` };
+    const since = daysBetween(targetDateStr, lastBooking);
+    if (since === 0) return { match: false, status: '✅ BOOKED', confidence: baseConf, reason: `Already booked for this date` };
+    if (since >= 6 && since <= 8) return { match: true, status: '🟢 DUE TODAY', confidence: 'HIGH', reason: `Weekly client — exactly ${since} days since last visit, strong pattern` };
+    if (since >= 9 && since <= 13) return { match: true, status: '🔴 OVERDUE', confidence: 'HIGH', reason: `Weekly client — ${since} days since last visit, overdue by ${since-7}d` };
+    if (since >= 14) return { match: true, status: '🔴 OVERDUE', confidence: 'HIGH', reason: `Weekly client — ${since} days since last visit, LONG OVERDUE` };
+    return { match: false, status: '⚪ NOT DUE', confidence: baseConf, reason: `Last visit only ${since} days ago` };
+  }
+
+  // ---------- BI-WEEKLY ----------
+  if (pattern.cadence === 'BI-WEEKLY') {
+    if (patternDay === null) return { match: false, status: '⚪ NOT DUE', confidence: 'LOW', reason: 'Missing day of week' };
+    if (targetDay !== patternDay) return { match: false, status: '⚪ NOT DUE', confidence: baseConf, reason: `Bi-weekly ${pattern.day_of_week} — not their day` };
+    if (!lastBooking) return { match: true, status: '🟡 LIKELY DUE', confidence: 'MEDIUM', reason: `Bi-weekly ${pattern.day_of_week} pattern — no recent record, suggesting as possible` };
+    const since = daysBetween(targetDateStr, lastBooking);
+    if (since === 0) return { match: false, status: '✅ BOOKED', confidence: baseConf, reason: `Already booked for this date` };
+    if (since >= 13 && since <= 15) return { match: true, status: '🟢 DUE TODAY', confidence: 'HIGH', reason: `Bi-weekly client — exactly ${since} days since last visit, matches cycle` };
+    if (since >= 16 && since <= 20) return { match: true, status: '🔴 OVERDUE', confidence: 'HIGH', reason: `Bi-weekly client — ${since} days since last visit, overdue` };
+    if (since >= 21) return { match: true, status: '🔴 OVERDUE', confidence: 'HIGH', reason: `Bi-weekly client — ${since} days since last visit, LONG OVERDUE` };
+    return { match: false, status: '⚪ NOT DUE', confidence: baseConf, reason: `Last visit only ${since} days ago, not due yet` };
+  }
+
+  // ---------- MONTHLY ----------
+  if (pattern.cadence === 'MONTHLY') {
+    if (patternDay === null) return { match: false, status: '⚪ NOT DUE', confidence: 'LOW', reason: 'Missing day of week' };
+    if (targetDay !== patternDay) return { match: false, status: '⚪ NOT DUE', confidence: baseConf, reason: `Monthly ${pattern.day_of_week} — not their day` };
+    if (!lastBooking) return { match: true, status: '🟡 LIKELY DUE', confidence: 'MEDIUM', reason: `Monthly ${pattern.day_of_week} pattern — no recent record` };
+    const since = daysBetween(targetDateStr, lastBooking);
+    if (since === 0) return { match: false, status: '✅ BOOKED', confidence: baseConf, reason: `Already booked for this date` };
+    if (since >= 25 && since <= 35) return { match: true, status: '🟢 DUE TODAY', confidence: 'HIGH', reason: `Monthly client — ${since} days since last visit, matches cycle` };
+    if (since >= 36 && since <= 50) return { match: true, status: '🔴 OVERDUE', confidence: 'HIGH', reason: `Monthly client — ${since} days since last visit, overdue` };
+    if (since >= 51) return { match: true, status: '🔴 OVERDUE', confidence: 'HIGH', reason: `Monthly client — ${since} days since last visit, LONG OVERDUE` };
+    return { match: false, status: '⚪ NOT DUE', confidence: baseConf, reason: `Last visit only ${since} days ago, not due yet` };
+  }
+
+  return { match: false, status: '⚪ NOT DUE', confidence: 'LOW', reason: 'Unknown cadence' };
+};
+
+// Returns array of { pattern, status, confidence, reason, isBooked, bookingRow, conflict }
+// for a given target date. Checks against saved bookings + current day's bookings.
+const buildDailyPlan = (patterns, targetDateStr, savedDays, currentBookings, currentDateStr) => {
+  const todayBookings = targetDateStr === currentDateStr ? currentBookings : (savedDays[targetDateStr]?.bookings || []);
+  const normalizeName = (s) => (s || '').trim().toLowerCase();
+
+  return patterns
+    .filter(p => p.active !== false)
+    .map(pattern => {
+      const match = matchPatternToDate(pattern, targetDateStr, currentDateStr);
+      // Is this client already booked for the target date?
+      const existingBooking = todayBookings.find(b => normalizeName(b.clientName) === normalizeName(pattern.client_name));
+      const isBooked = !!existingBooking;
+      let status = match.status;
+      if (isBooked) status = '✅ BOOKED';
+
+      // Cleaner conflict detection on the suggested time
+      let conflict = null;
+      if (!isBooked && pattern.suggested_cleaner && pattern.suggested_time && match.match) {
+        const requested = parseTimingToMinutes(pattern.suggested_time);
+        if (requested) {
+          const conflictingBooking = todayBookings.find(b => {
+            if (!b.cleaner || !b.timing) return false;
+            if (normalizeName(b.cleaner) !== normalizeName(pattern.suggested_cleaner)) return false;
+            const bInterval = parseTimingToMinutes(b.timing);
+            return bInterval && intervalsOverlap(requested, bInterval);
+          });
+          if (conflictingBooking) {
+            conflict = {
+              cleaner: pattern.suggested_cleaner,
+              conflictWith: conflictingBooking.clientName,
+              conflictTiming: conflictingBooking.timing,
+            };
+          }
+        }
+      }
+
+      return { pattern, status, confidence: match.confidence, reason: match.reason, isBooked, bookingRow: existingBooking, conflict, match: match.match };
+    })
+    .filter(r => r.match || r.isBooked);
+};
 
 export default function CleaningApp() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -252,6 +376,8 @@ export default function CleaningApp() {
   const [savedDays, setSavedDays] = useState({});
   const [clients, setClients] = useState([]);
   const [contracts, setContracts] = useState([]);
+  // Daily Booking Suggestion Engine — the 53 recurring patterns from Supabase
+  const [recurringClients, setRecurringClients] = useState([]);
   // Smart Day Builder: scheduledBookings = pre-booked future appointments
   // Each one: { id, clientId, clientName, phone, location, lat, lng, date, timing, cleaner,
   //            pricePerHour, pickupType, withMaterials, paymentType, notes, reminderPref,
@@ -401,6 +527,16 @@ export default function CleaningApp() {
           setContracts(cs);
           try { localStorage.setItem('sparkle_contracts', JSON.stringify(cs)); } catch (e) {}
         }
+
+        // Daily Booking Suggestion Engine — recurring_clients patterns.
+        // Table may not exist yet (user runs the setup SQL separately). Fail silently.
+        try {
+          const { data: rcData, error: rcErr } = await supabase.from('recurring_clients').select('*').order('rev_2mo', { ascending: false });
+          if (!rcErr && rcData) {
+            setRecurringClients(rcData);
+            try { localStorage.setItem('sparkle_recurring_clients', JSON.stringify(rcData)); } catch (e) {}
+          }
+        } catch (e) { /* table doesn't exist yet */ }
 
         // Smart Day Builder: load scheduled (future) bookings from Supabase.
         // Table may not exist yet — the error is caught silently so the app still works
@@ -562,6 +698,10 @@ export default function CleaningApp() {
     const newSaved = { ...savedDays, [date]: { bookings, savedAt: new Date().toISOString() } };
     setSavedDays(newSaved);
     try { localStorage.setItem('sparkle_all_days', JSON.stringify(newSaved)); } catch (e) {}
+    // Learn: update last_booking_date in recurring_clients for any client who got booked today
+    bookings.forEach(b => {
+      if (b.clientName) recordBookingForLearning(b.clientName, date);
+    });
     setCloudStatus('syncing');
     try {
       const { error } = await supabase.from('days').upsert({ date, bookings, saved_at: new Date().toISOString() });
@@ -651,6 +791,24 @@ export default function CleaningApp() {
       setCloudStatus('offline');
       console.error('Cloud sync error (contracts):', e);
     }
+  };
+
+  // Daily Booking Suggestion Engine — update last_booking_date in Supabase
+  // when a matching booking is saved. This lets the engine "learn" over time.
+  const recordBookingForLearning = async (clientName, bookingDate) => {
+    if (!clientName || !bookingDate) return;
+    const normalize = (s) => (s || '').trim().toLowerCase();
+    const target = normalize(clientName);
+    const match = recurringClients.find(p => normalize(p.client_name) === target);
+    if (!match) return;
+    // Only update if the new booking is more recent than what's already stored
+    if (match.last_booking_date && match.last_booking_date >= bookingDate) return;
+    const next = recurringClients.map(p => p.id === match.id ? { ...p, last_booking_date: bookingDate } : p);
+    setRecurringClients(next);
+    try { localStorage.setItem('sparkle_recurring_clients', JSON.stringify(next)); } catch (e) {}
+    try {
+      await supabase.from('recurring_clients').update({ last_booking_date: bookingDate, updated_at: new Date().toISOString() }).eq('id', match.id);
+    } catch (e) { /* table may not exist yet */ }
   };
 
   // Smart Day Builder: persist scheduled (future) bookings — localStorage + Supabase.
@@ -1941,9 +2099,12 @@ export default function CleaningApp() {
   // ===== CLOUD-SYNCED SMART SUGGESTIONS TOGGLE =====
   // Lives inside companyInfo (JSONB in Supabase) so one toggle affects every device
   // the next time they load from cloud. No new DB column needed.
-  const smartSuggestionsOff = !!(companyInfo && companyInfo.smartSuggestionsOff);
-  const toggleSmartSuggestionsOff = (val) => {
-    saveCompanyInfo({ ...companyInfo, smartSuggestionsOff: !!val });
+  // DEFAULT: Smart Suggestions are OFF. The user turns them ON explicitly if desired.
+  // So the panel only shows when companyInfo.smartSuggestionsEnabled === true.
+  const smartSuggestionsEnabled = !!(companyInfo && companyInfo.smartSuggestionsEnabled);
+  const smartSuggestionsOff = !smartSuggestionsEnabled;
+  const toggleSmartSuggestionsOff = (shouldBeOff) => {
+    saveCompanyInfo({ ...companyInfo, smartSuggestionsEnabled: !shouldBeOff });
   };
 
   const colors = {
@@ -2014,6 +2175,7 @@ export default function CleaningApp() {
         </div>
         <div style={{ display: 'flex', marginTop: '16px', borderBottom: `1px solid ${colors.border}`, marginLeft: -32, marginRight: -32, paddingLeft: 32, paddingRight: 32, overflowX: 'auto' }}>
           <button className={`tab ${view === 'input' ? 'active' : ''}`} onClick={() => setView('input')}><Plus size={15} /> Bookings ({bookingsWithCalc.length})</button>
+          <button className={`tab ${view === 'plan' ? 'active' : ''}`} onClick={() => setView('plan')}>📅 Plan</button>
           <button className={`tab ${view === 'deployment' ? 'active' : ''}`} onClick={() => setView('deployment')}><Grid3x3 size={15} /> Deployment</button>
           <button className={`tab ${view === 'report' ? 'active' : ''}`} onClick={() => setView('report')}><FileText size={15} /> Daily Report</button>
           <button className={`tab ${view === 'clients' ? 'active' : ''}`} onClick={() => setView('clients')}><BookUser size={15} /> Clients ({clients.length})</button>
@@ -2033,6 +2195,7 @@ export default function CleaningApp() {
 
       <div style={{ padding: '32px', maxWidth: '1400px', margin: '0 auto' }}>
         {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} smartSuggestionsOff={smartSuggestionsOff} />}
+        {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} bookings={bookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
         {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
@@ -3933,6 +4096,310 @@ function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// BOOKING PLAN VIEW — DAILY BOOKING SUGGESTION ENGINE
+// Reads from recurring_clients + current/saved bookings and shows:
+//   - Dashboard stats (expected, booked, to-contact, conflicts, revenue)
+//   - 🔴 Clients to Contact (not yet booked)
+//   - 🟢 Already Booked (confirmed)
+//   - ⚠️ Cleaner conflicts
+//   - 7-day forecast
+// Also includes a WhatsApp "Contact Client" quick-action.
+// =====================================================================
+function BookingPlanView({ recurringClients, savedDays, bookings, date, colors, clients, companyInfo, allCleaners, setView, setDate }) {
+  const [targetDate, setTargetDate] = React.useState(date);
+  const [search, setSearch] = React.useState('');
+  React.useEffect(() => { setTargetDate(date); }, [date]);
+
+  const plan = React.useMemo(
+    () => buildDailyPlan(recurringClients, targetDate, savedDays, bookings, date),
+    [recurringClients, targetDate, savedDays, bookings, date]
+  );
+
+  // Grouping
+  const filtered = plan.filter(r => !search || r.pattern.client_name.toLowerCase().includes(search.toLowerCase()));
+  const confirmed = filtered.filter(r => r.isBooked);
+  const toContactDue = filtered.filter(r => !r.isBooked && r.status === '🟢 DUE TODAY');
+  const toContactLikely = filtered.filter(r => !r.isBooked && r.status === '🟡 LIKELY DUE');
+  const overdue = filtered.filter(r => !r.isBooked && r.status === '🔴 OVERDUE');
+  const conflicts = filtered.filter(r => r.conflict);
+
+  // Expected revenue: sum of hours × rate for all suggested bookings
+  const estimateRevenue = (p) => {
+    const t = parseTimingToMinutes(p.suggested_time);
+    const hours = t ? (t.end - t.start) / 60 : 2;
+    return hours * (p.rate_per_hour || 25);
+  };
+  const expectedRevenue = plan
+    .filter(r => r.match && !r.isBooked)
+    .reduce((s, r) => s + estimateRevenue(r.pattern), 0);
+  const bookedRevenue = plan
+    .filter(r => r.isBooked && r.bookingRow)
+    .reduce((s, r) => {
+      const t = parseTimingToMinutes(r.bookingRow.timing);
+      const hrs = t ? (t.end - t.start) / 60 : 2;
+      return s + hrs * (r.bookingRow.pricePerHour || 0);
+    }, 0);
+
+  const formatDateLabel = (dStr) => {
+    const d = new Date(dStr + 'T12:00:00');
+    return d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  };
+
+  // 7-day forecast
+  const forecast7 = React.useMemo(() => {
+    const results = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(targetDate + 'T12:00:00');
+      d.setDate(d.getDate() + i);
+      const dStr = d.toISOString().slice(0, 10);
+      const dayPlan = buildDailyPlan(recurringClients, dStr, savedDays, i === 0 && dStr === date ? bookings : [], date);
+      results.push({
+        date: dStr,
+        label: d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }),
+        expected: dayPlan.filter(r => r.match && !r.isBooked).length,
+        confirmed: dayPlan.filter(r => r.isBooked).length,
+        toContact: dayPlan.filter(r => !r.isBooked && (r.status === '🟢 DUE TODAY' || r.status === '🟡 LIKELY DUE')).length,
+        overdue: dayPlan.filter(r => !r.isBooked && r.status === '🔴 OVERDUE').length,
+        revenue: dayPlan.filter(r => r.match && !r.isBooked).reduce((s, r) => s + estimateRevenue(r.pattern), 0),
+      });
+    }
+    return results;
+  }, [recurringClients, targetDate, savedDays, bookings, date]);
+
+  const sendWhatsApp = (p) => {
+    const client = clients.find(c => (c.name || '').trim().toLowerCase() === p.client_name.trim().toLowerCase());
+    const phoneRaw = client?.phone || '';
+    if (!phoneRaw) {
+      alert(`No phone saved for ${p.client_name}. Add it in the Clients tab first.`);
+      return;
+    }
+    let digits = String(phoneRaw).replace(/[^\d]/g, '');
+    if (digits.startsWith('00')) digits = digits.slice(2);
+    if (digits.startsWith('0')) digits = '971' + digits.slice(1);
+    if (!digits.startsWith('971') && digits.length <= 9) digits = '971' + digits;
+    const [y, m, d] = targetDate.split('-');
+    const dateFormatted = `${d}/${m}/${y}`;
+    const company = companyInfo?.name || 'AR Cleaning Services';
+    const msg = `Hello ${p.client_name},\n\nWe'd like to confirm your usual cleaning for ${dateFormatted}.\n\n🕐 Preferred time: ${p.suggested_time}\n💰 Rate: ${p.rate_per_hour} AED/hour\n\nShall we proceed? Please reply to confirm.\n\n— ${company}`;
+    window.open(`https://wa.me/${digits}?text=${encodeURIComponent(msg)}`, '_blank');
+  };
+
+  const goToBookings = (p) => {
+    // Jump to Bookings tab on the target date — the user can then add this booking manually
+    setDate(targetDate);
+    setView('input');
+  };
+
+  const Row = ({ r, showContactBtn }) => {
+    const p = r.pattern;
+    const confColor = r.confidence === 'HIGH' ? colors.accent : r.confidence === 'MEDIUM' ? colors.gold : colors.ink + '99';
+    return (
+      <div style={{
+        background: 'white',
+        border: `1.5px solid ${r.conflict ? '#DC2626' : colors.border}`,
+        borderRadius: '10px',
+        padding: '12px 14px',
+        display: 'grid',
+        gridTemplateColumns: 'minmax(170px, 1.4fr) minmax(120px, 1fr) minmax(100px, 0.8fr) minmax(120px, 1fr) auto',
+        gap: '10px',
+        alignItems: 'center',
+      }}>
+        <div>
+          <div style={{ fontSize: '14px', fontWeight: 700 }}>{p.client_name}</div>
+          <div style={{ fontSize: '11px', color: colors.ink + '99', marginTop: '2px' }}>{r.reason}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: '11px', color: colors.ink + '77', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Cadence</div>
+          <div style={{ fontSize: '13px', fontWeight: 600 }}>{p.cadence} · {p.day_of_week}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: '11px', color: colors.ink + '77', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Time</div>
+          <div className="mono" style={{ fontSize: '13px', fontWeight: 600 }}>{p.suggested_time}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: '11px', color: colors.ink + '77', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Cleaner</div>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: confColor }}>
+            {p.suggested_cleaner} <span style={{ fontWeight: 400, opacity: 0.6, fontSize: '11px' }}>({p.cleaner_pct}%)</span>
+          </div>
+          {r.conflict && (
+            <div style={{ fontSize: '10px', color: '#991B1B', fontWeight: 700, marginTop: '2px' }}>
+              ⚠️ Busy — {r.conflict.conflictWith} <span className="mono">{r.conflict.conflictTiming}</span>
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: '6px', flexDirection: 'column', alignItems: 'flex-end' }}>
+          <div style={{ fontSize: '11px', color: colors.ink + '77' }}>{p.rate_per_hour} AED/hr</div>
+          {showContactBtn && (
+            <div style={{ display: 'flex', gap: '4px' }}>
+              <button className="btn btn-sm" onClick={() => sendWhatsApp(p)} style={{ background: '#25D366', borderColor: '#25D366', color: 'white', fontSize: '11px', padding: '4px 8px' }}>
+                📱 Contact
+              </button>
+              <button className="btn btn-sm" onClick={() => goToBookings(p)} style={{ fontSize: '11px', padding: '4px 8px' }}>
+                + Book
+              </button>
+            </div>
+          )}
+          {r.isBooked && <span style={{ fontSize: '11px', color: colors.accent, fontWeight: 700 }}>✅ BOOKED</span>}
+        </div>
+      </div>
+    );
+  };
+
+  const sumRevenue = forecast7.reduce((s, d) => s + d.revenue, 0);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '18px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>📅 Daily Booking Plan</h2>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Who to contact today · based on 53 historical client patterns</p>
+        </div>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ fontSize: '12px', fontWeight: 700 }}>TARGET DATE</label>
+          <input className="input" type="date" value={targetDate} onChange={e => setTargetDate(e.target.value)} style={{ fontWeight: 700 }} />
+          <input className="input" placeholder="Search client…" value={search} onChange={e => setSearch(e.target.value)} style={{ width: '160px' }} />
+        </div>
+      </div>
+
+      {/* ===== DASHBOARD ===== */}
+      <div style={{ background: colors.accent, color: 'white', borderRadius: '14px', padding: '20px 24px', marginBottom: '16px' }}>
+        <div style={{ fontSize: '12px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>Target date</div>
+        <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, marginBottom: '14px' }}>{formatDateLabel(targetDate)}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '14px' }}>
+          <StatMiniLight label="Total expected" value={toContactDue.length + toContactLikely.length + overdue.length + confirmed.length} />
+          <StatMiniLight label="✅ Confirmed" value={confirmed.length} />
+          <StatMiniLight label="📞 To contact" value={toContactDue.length + toContactLikely.length} highlight />
+          <StatMiniLight label="🔴 Overdue" value={overdue.length} />
+          <StatMiniLight label="⚠️ Conflicts" value={conflicts.length} />
+          <StatMiniLight label="💰 Est. revenue" value={`${(expectedRevenue + bookedRevenue).toFixed(0)} AED`} />
+        </div>
+      </div>
+
+      {recurringClients.length === 0 && (
+        <div style={{ background: '#FEF3C7', border: '2px solid #F59E0B', borderRadius: '10px', padding: '16px 20px', marginBottom: '14px' }}>
+          <div style={{ fontWeight: 700, color: '#78350F', marginBottom: '4px' }}>⚠️ No recurring client patterns loaded</div>
+          <div style={{ fontSize: '12px', color: '#7F1D1D' }}>
+            Run <strong>recurring_clients_setup.sql</strong> in your Supabase SQL Editor to seed the 53 known client patterns. Then reload this page.
+          </div>
+        </div>
+      )}
+
+      {/* ===== 🔴 OVERDUE CLIENTS ===== */}
+      {overdue.length > 0 && (
+        <div style={{ background: 'white', borderRadius: '12px', border: `2px solid ${colors.rust}`, padding: '18px', marginBottom: '14px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 10px', fontSize: '17px', fontWeight: 700, color: colors.rust }}>
+            🔴 Overdue — contact these first ({overdue.length})
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {overdue.map(r => <Row key={r.pattern.id} r={r} showContactBtn={true} />)}
+          </div>
+        </div>
+      )}
+
+      {/* ===== 🟢 DUE TODAY — HIGH PRIORITY ===== */}
+      {toContactDue.length > 0 && (
+        <div style={{ background: 'white', borderRadius: '12px', border: `2px solid ${colors.accent}`, padding: '18px', marginBottom: '14px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 10px', fontSize: '17px', fontWeight: 700, color: colors.accent }}>
+            🟢 Due today — high priority contact ({toContactDue.length})
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {toContactDue.map(r => <Row key={r.pattern.id} r={r} showContactBtn={true} />)}
+          </div>
+        </div>
+      )}
+
+      {/* ===== 🟡 LIKELY DUE — MEDIUM PRIORITY ===== */}
+      {toContactLikely.length > 0 && (
+        <div style={{ background: 'white', borderRadius: '12px', border: `1.5px solid ${colors.gold}`, padding: '18px', marginBottom: '14px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 10px', fontSize: '17px', fontWeight: 700, color: '#78350F' }}>
+            🟡 Likely due — consider contacting ({toContactLikely.length})
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {toContactLikely.map(r => <Row key={r.pattern.id} r={r} showContactBtn={true} />)}
+          </div>
+        </div>
+      )}
+
+      {/* ===== ✅ CONFIRMED BOOKINGS ===== */}
+      {confirmed.length > 0 && (
+        <div style={{ background: 'white', borderRadius: '12px', border: `1.5px solid ${colors.border}`, padding: '18px', marginBottom: '14px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 10px', fontSize: '17px', fontWeight: 700 }}>
+            ✅ Confirmed bookings ({confirmed.length})
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {confirmed.map(r => <Row key={r.pattern.id} r={r} showContactBtn={false} />)}
+          </div>
+        </div>
+      )}
+
+      {/* ===== 7-DAY FORECAST ===== */}
+      <div style={{ background: 'white', borderRadius: '12px', border: `1.5px solid ${colors.border}`, padding: '18px', marginBottom: '14px' }}>
+        <h3 className="display-font" style={{ margin: '0 0 12px', fontSize: '17px', fontWeight: 700 }}>
+          📊 7-day forecast — total est. revenue: <span style={{ color: colors.accent }}>{sumRevenue.toFixed(0)} AED</span>
+        </h3>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+            <thead>
+              <tr style={{ background: colors.soft, borderBottom: `2px solid ${colors.border}` }}>
+                <th style={{ padding: '8px 10px', textAlign: 'left' }}>Date</th>
+                <th style={{ padding: '8px 10px', textAlign: 'center' }}>Expected</th>
+                <th style={{ padding: '8px 10px', textAlign: 'center' }}>✅ Confirmed</th>
+                <th style={{ padding: '8px 10px', textAlign: 'center' }}>📞 To contact</th>
+                <th style={{ padding: '8px 10px', textAlign: 'center' }}>🔴 Overdue</th>
+                <th style={{ padding: '8px 10px', textAlign: 'right' }}>Est. revenue</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {forecast7.map(d => (
+                <tr key={d.date} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                  <td style={{ padding: '8px 10px', fontWeight: 600 }}>{d.label}</td>
+                  <td style={{ padding: '8px 10px', textAlign: 'center' }}>{d.expected + d.confirmed}</td>
+                  <td style={{ padding: '8px 10px', textAlign: 'center', color: colors.accent, fontWeight: 600 }}>{d.confirmed}</td>
+                  <td style={{ padding: '8px 10px', textAlign: 'center', color: colors.gold, fontWeight: 600 }}>{d.toContact}</td>
+                  <td style={{ padding: '8px 10px', textAlign: 'center', color: colors.rust, fontWeight: 600 }}>{d.overdue}</td>
+                  <td className="mono" style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{d.revenue.toFixed(0)}</td>
+                  <td style={{ padding: '4px 10px' }}>
+                    <button className="btn btn-sm" style={{ fontSize: '11px', padding: '4px 8px' }} onClick={() => setTargetDate(d.date)}>
+                      Open →
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ===== EXPLANATION / HELP ===== */}
+      <div style={{ background: colors.soft, borderRadius: '10px', padding: '14px 18px', fontSize: '12px', color: colors.ink + 'AA' }}>
+        <strong>How it works:</strong> This engine reads 53 historical client patterns and tells you who's due for a booking on the target date.
+        <br />• <strong>🟢 Due today</strong> = Strong historical pattern matches this date → contact now
+        <br />• <strong>🟡 Likely due</strong> = Pattern matches this day of week but weaker history → consider contacting
+        <br />• <strong>🔴 Overdue</strong> = Should have booked by now based on cadence → urgent follow-up
+        <br />• <strong>✅ Confirmed</strong> = Already in today's booking list
+        <br />• <strong>⚠️ Conflict</strong> = Suggested cleaner is already assigned at that time → pick an alternative
+      </div>
+    </div>
+  );
+}
+
+// Small stat tile for the Plan dashboard
+function StatMiniLight({ label, value, highlight }) {
+  return (
+    <div style={{
+      background: highlight ? 'rgba(255, 255, 255, 0.22)' : 'rgba(255, 255, 255, 0.1)',
+      borderRadius: '10px',
+      padding: '10px 14px',
+      border: highlight ? '1.5px solid rgba(255, 255, 255, 0.5)' : '1px solid rgba(255, 255, 255, 0.15)',
+    }}>
+      <div style={{ fontSize: '11px', opacity: 0.85, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>
+      <div className="display-font" style={{ fontSize: '22px', fontWeight: 800, marginTop: '2px' }}>{value}</div>
     </div>
   );
 }
