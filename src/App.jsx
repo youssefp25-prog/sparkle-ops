@@ -262,6 +262,8 @@ export default function CleaningApp() {
   const [autoRunDates] = useState(() => new Set());
   // Smart Day Builder panel open/closed (per-day — resets on date change)
   const [smartBuilderDismissed, setSmartBuilderDismissed] = useState(false);
+  // (Smart Suggestions off-switch is derived from companyInfo further down —
+  //  it's cloud-synced so it applies to every device at once.)
   const [statusMsg, setStatusMsg] = useState('');
   const [clientPickerFor, setClientPickerFor] = useState(null);
   const [bookingPinFor, setBookingPinFor] = useState(null);
@@ -1936,6 +1938,14 @@ export default function CleaningApp() {
 
   const printPage = () => window.print();
 
+  // ===== CLOUD-SYNCED SMART SUGGESTIONS TOGGLE =====
+  // Lives inside companyInfo (JSONB in Supabase) so one toggle affects every device
+  // the next time they load from cloud. No new DB column needed.
+  const smartSuggestionsOff = !!(companyInfo && companyInfo.smartSuggestionsOff);
+  const toggleSmartSuggestionsOff = (val) => {
+    saveCompanyInfo({ ...companyInfo, smartSuggestionsOff: !!val });
+  };
+
   const colors = {
     bg: '#FAF8F3', paper: '#FFFFFF', ink: '#1A1A1A', accent: '#0F4C3A',
     accentLight: '#E8F0EC', gold: '#C9A961', rust: '#B8472A', soft: '#F0EBE0',
@@ -2022,7 +2032,7 @@ export default function CleaningApp() {
       </div>
 
       <div style={{ padding: '32px', maxWidth: '1400px', margin: '0 auto' }}>
-        {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} />}
+        {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} smartSuggestionsOff={smartSuggestionsOff} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
         {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
@@ -2036,7 +2046,7 @@ export default function CleaningApp() {
         {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} currentDate={date} currentBookings={bookings} savedDays={savedDays} />}
         {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} payroll={payroll} savePayroll={savePayroll} PAYROLL_ROSTER={PAYROLL_ROSTER} cleanerProfiles={cleanerProfiles} />}
         {view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} allBookings={allBookingsWithDate} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} />}
-        {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} cloudStatus={cloudStatus} lastSync={lastSync} bookings={bookings} savedDays={savedDays} clients={clients} contracts={contracts} cleanerHomes={cleanerHomes} officeAddress={officeAddress} expenses={expenses} setCloudStatus={setCloudStatus} setLastSync={setLastSync} />}
+        {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} cloudStatus={cloudStatus} lastSync={lastSync} bookings={bookings} savedDays={savedDays} clients={clients} contracts={contracts} cleanerHomes={cleanerHomes} officeAddress={officeAddress} expenses={expenses} setCloudStatus={setCloudStatus} setLastSync={setLastSync} smartSuggestionsOff={smartSuggestionsOff} toggleSmartSuggestionsOff={toggleSmartSuggestionsOff} />}
       </div>
 
       {clientPickerFor && <ClientPickerModal clients={clients} onPick={(c) => applyClientToBooking(clientPickerFor, c)} onClose={() => setClientPickerFor(null)} colors={colors} />}
@@ -2046,10 +2056,39 @@ export default function CleaningApp() {
   );
 }
 
-function InputView({ bookings, setBookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, allCleaners, clients, saveClients, setClientPickerFor, setBookingPinFor, contracts, generateFromContracts, exportEverythingExcel, companyInfo, scheduledBookings, saveScheduledBookings, smartSuggestions, smartBuilderDismissed, setSmartBuilderDismissed }) {
+function InputView({ bookings, setBookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, allCleaners, clients, saveClients, setClientPickerFor, setBookingPinFor, contracts, generateFromContracts, exportEverythingExcel, companyInfo, scheduledBookings, saveScheduledBookings, smartSuggestions, smartBuilderDismissed, setSmartBuilderDismissed, smartSuggestionsOff }) {
   const dayOfWeek = new Date(date).getDay();
   const todayContracts = contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek));
   const [showFastBooking, setShowFastBooking] = useState(false);
+
+  // ===== DOUBLE-BOOKING DETECTION (live, as the user types) =====
+  // Group all bookings by cleaner and find any pair with overlapping intervals.
+  const bookingConflicts = React.useMemo(() => {
+    const byClnr = {};
+    bookings.forEach(b => {
+      if (!b.cleaner || !b.timing) return;
+      const parsed = parseTimingToMinutes(b.timing);
+      if (!parsed) return;
+      if (!byClnr[b.cleaner]) byClnr[b.cleaner] = [];
+      byClnr[b.cleaner].push({ booking: b, interval: parsed });
+    });
+    const conflictedIds = new Set();
+    const pairsByCleaner = {};
+    Object.entries(byClnr).forEach(([cleaner, arr]) => {
+      for (let i = 0; i < arr.length; i++) {
+        for (let k = i + 1; k < arr.length; k++) {
+          if (intervalsOverlap(arr[i].interval, arr[k].interval)) {
+            conflictedIds.add(arr[i].booking.id);
+            conflictedIds.add(arr[k].booking.id);
+            if (!pairsByCleaner[cleaner]) pairsByCleaner[cleaner] = [];
+            pairsByCleaner[cleaner].push({ a: arr[i].booking, b: arr[k].booking });
+          }
+        }
+      }
+    });
+    const total = Object.values(pairsByCleaner).reduce((s, a) => s + a.length, 0);
+    return { conflictedIds, pairsByCleaner, total };
+  }, [bookings]);
 
   // Build a WhatsApp confirmation message and open the WhatsApp chat with it pre-filled.
   // Handles UAE phone numbers: if the number doesn't start with +/00/971, prepend 971.
@@ -2101,6 +2140,42 @@ Thank you for choosing us!
         <StatCard icon={<DollarSign size={18} />} label="Online" value={`${onlineTotal.toFixed(0)}`} color={colors.ink} colors={colors} />
       </div>
 
+      {/* ===== DOUBLE-BOOKING WARNING ===== */}
+      {bookingConflicts.total > 0 && (
+        <div style={{
+          background: '#FEE2E2',
+          border: '2px solid #DC2626',
+          borderRadius: '10px',
+          padding: '14px 18px',
+          marginBottom: '16px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '22px' }}>🚨</span>
+            <div style={{ flex: 1, minWidth: '220px' }}>
+              <div className="display-font" style={{ fontSize: '16px', fontWeight: 800, color: '#991B1B', marginBottom: '4px' }}>
+                Double booking — {bookingConflicts.total} conflict{bookingConflicts.total > 1 ? 's' : ''}
+              </div>
+              <div style={{ fontSize: '12px', color: '#7F1D1D', marginBottom: '8px' }}>
+                Same cleaner assigned to overlapping jobs. Change the cleaner or the time on one of them.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {Object.entries(bookingConflicts.pairsByCleaner).map(([cleaner, pairs]) => (
+                  <div key={cleaner} style={{ fontSize: '12px', color: '#7F1D1D' }}>
+                    <strong>{cleaner}:</strong>{' '}
+                    {pairs.map((p, i) => (
+                      <span key={i}>
+                        {i > 0 && ' · '}
+                        {p.a.clientName || '(unnamed)'} <span className="mono">{p.a.timing}</span> ↔ {p.b.clientName || '(unnamed)'} <span className="mono">{p.b.timing}</span>
+                      </span>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {todayContracts.length > 0 && (
         <div style={{ background: colors.accentLight, border: `1.5px solid ${colors.accent}`, borderRadius: '10px', padding: '14px 18px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
           <div>
@@ -2115,7 +2190,8 @@ Thank you for choosing us!
       )}
 
       {/* ============ SMART DAY BUILDER PANEL ============ */}
-      {!smartBuilderDismissed && (
+      {/* Hidden entirely when the user turns off Smart Suggestions in Settings. */}
+      {!smartBuilderDismissed && !smartSuggestionsOff && (
         <SmartDayBuilder
           bookings={bookings}
           setBookings={setBookings}
@@ -2162,9 +2238,14 @@ Thank you for choosing us!
               {bookings.map(b => {
                 const hours = parseHours(b.timing);
                 const total = hours * parseFloat(b.pricePerHour || 0);
+                const hasConflict = bookingConflicts.conflictedIds.has(b.id);
                 return (
-                  <tr key={b.id} style={{ borderTop: `1px solid ${colors.border}` }}>
-                    <Td><select className="select" value={b.cleaner} onChange={e => updateBooking(b.id, 'cleaner', e.target.value)}>
+                  <tr key={b.id} style={{
+                    borderTop: `1px solid ${colors.border}`,
+                    background: hasConflict ? '#FEF2F2' : 'transparent',
+                    boxShadow: hasConflict ? 'inset 4px 0 0 #DC2626' : 'none',
+                  }} title={hasConflict ? `⚠️ Double booking — ${b.cleaner} is already assigned to another overlapping job` : undefined}>
+                    <Td><select className="select" value={b.cleaner} onChange={e => updateBooking(b.id, 'cleaner', e.target.value)} style={{ borderColor: hasConflict ? '#DC2626' : undefined }}>
                       {/* Include the current cleaner even if not in allCleaners (e.g. history for a removed staff) */}
                       {b.cleaner && !allCleaners.includes(b.cleaner) && <option key={b.cleaner}>{b.cleaner}</option>}
                       {allCleaners.map(c => <option key={c}>{c}</option>)}
@@ -3911,6 +3992,38 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
     });
   });
 
+  // ===== DOUBLE-BOOKING DETECTION =====
+  // For each cleaner, find jobs whose intervals overlap another job of the SAME cleaner.
+  // Builds a Set of booking identifiers that are in conflict, and a per-cleaner list of
+  // conflict pairs for the warning banner.
+  const conflictedJobIds = new Set();
+  const conflictsByCleaner = {};
+  displayCleaners.forEach(cleaner => {
+    const jobs = byCleaner[cleaner] || [];
+    const parsed = jobs.map(j => ({ job: j, interval: parseTimingToMinutes(j.timing) }));
+    for (let i = 0; i < parsed.length; i++) {
+      for (let k = i + 1; k < parsed.length; k++) {
+        const a = parsed[i], b = parsed[k];
+        if (!a.interval || !b.interval) continue;
+        // Don't flag the SAME booking appearing twice (shouldn't happen, defensive)
+        if (a.job.id && b.job.id && a.job.id === b.job.id) continue;
+        // Don't flag the SAME client at the SAME time (team of multiple cleaners on same job
+        // appears in different cleaner columns, but same cleaner column shouldn't have the
+        // same client twice. If it does, still flag — probably a duplicate entry).
+        if (intervalsOverlap(a.interval, b.interval)) {
+          const idA = a.job.id || `${cleaner}-${i}`;
+          const idB = b.job.id || `${cleaner}-${k}`;
+          conflictedJobIds.add(idA);
+          conflictedJobIds.add(idB);
+          if (!conflictsByCleaner[cleaner]) conflictsByCleaner[cleaner] = [];
+          conflictsByCleaner[cleaner].push({ a: a.job, b: b.job });
+        }
+      }
+    }
+  });
+  const totalConflicts = Object.values(conflictsByCleaner).reduce((s, arr) => s + arr.length, 0);
+  const isConflicted = (job, idx, cleaner) => conflictedJobIds.has(job.id || `${cleaner}-${idx}`);
+
   return (
     <div>
       <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
@@ -3920,6 +4033,49 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
         </div>
         <button className="btn btn-primary" onClick={printPage}><Printer size={14} /> Print</button>
       </div>
+      {/* ===== DOUBLE-BOOKING WARNING BANNER ===== */}
+      {totalConflicts > 0 && (
+        <div className="no-print" style={{
+          background: '#FEE2E2',
+          border: '2px solid #DC2626',
+          borderRadius: '10px',
+          padding: '14px 18px',
+          marginBottom: '14px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '22px' }}>🚨</span>
+            <div style={{ flex: 1, minWidth: '220px' }}>
+              <div className="display-font" style={{ fontSize: '17px', fontWeight: 800, color: '#991B1B' }}>
+                Double booking detected — {totalConflicts} conflict{totalConflicts > 1 ? 's' : ''} found
+              </div>
+              <div style={{ fontSize: '12px', color: '#7F1D1D', marginTop: '2px' }}>
+                One or more cleaners are assigned to overlapping jobs. Fix in the <strong>Bookings</strong> tab before deploying.
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {Object.entries(conflictsByCleaner).map(([cleaner, pairs]) => (
+              <div key={cleaner} style={{
+                background: 'white',
+                border: '1px solid #FCA5A5',
+                borderRadius: '6px',
+                padding: '8px 12px',
+                fontSize: '12px',
+              }}>
+                <div style={{ fontWeight: 700, color: '#991B1B', marginBottom: '4px' }}>⚠️ {cleaner}</div>
+                {pairs.map((p, idx) => (
+                  <div key={idx} style={{ color: '#7F1D1D', paddingLeft: '12px' }}>
+                    • <strong>{p.a.clientName || '(unnamed)'}</strong> <span className="mono">{p.a.timing}</span> overlaps <strong>{p.b.clientName || '(unnamed)'}</strong> <span className="mono">{p.b.timing}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div style={{ background: 'white', padding: '24px', borderRadius: '8px', border: `1px solid ${colors.border}` }}>
         <div style={{ background: colors.headerGreen, color: 'white', textAlign: 'center', padding: '14px', fontSize: '20px', fontWeight: 700, fontFamily: 'Fraunces, serif', border: `2px solid ${colors.ink}`, borderBottom: 'none' }}>Deployment — {formatDate(date)}</div>
         <table className="grid-table">
@@ -3952,20 +4108,42 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
                   }
                   // Multiple jobs in the same slot stack vertically with a thin divider
                   const anyMaterials = jobs.some(j => j.withMaterials);
+                  // Any job in this cell conflicted? Mark the whole cell with red outline
+                  const cellHasConflict = jobs.some((j, idx) => {
+                    const globalIdx = (byCleaner[cleaner] || []).indexOf(j);
+                    return isConflicted(j, globalIdx >= 0 ? globalIdx : idx, cleaner);
+                  });
                   return (
-                    <td key={cleaner} className="deployment-cell" style={{ background: anyMaterials ? colors.cellMaterials : 'white', padding: '6px 6px' }}>
-                      {jobs.map((job, idx) => (
-                        <div key={idx} style={{
-                          padding: idx === 0 ? '0 0 6px 0' : '6px 0',
-                          borderTop: idx > 0 ? `1px dashed ${colors.ink}44` : 'none',
-                        }}>
-                          <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '3px' }}>{job.clientName}</div>
-                          <div style={{ fontSize: '11px', lineHeight: '1.4' }}>{job.location}</div>
-                          {job.withMaterials && <div style={{ fontSize: '10px', color: colors.accent, fontWeight: 700, marginTop: '3px' }}>w/ materials</div>}
-                          <div className="mono" style={{ fontSize: '12px', fontWeight: 600, marginTop: '4px' }}>{job.timing}</div>
-                          <div className="mono" style={{ fontSize: '12px', fontWeight: 700, color: colors.priceRed, marginTop: '3px' }}>({job.total.toFixed(0)} AED/{job.paymentType === 'CASH' ? 'C' : 'O'})</div>
-                        </div>
-                      ))}
+                    <td key={cleaner} className="deployment-cell" style={{
+                      background: cellHasConflict ? '#FEE2E2' : (anyMaterials ? colors.cellMaterials : 'white'),
+                      padding: '6px 6px',
+                      outline: cellHasConflict ? '3px solid #DC2626' : 'none',
+                      outlineOffset: '-3px',
+                      position: 'relative',
+                    }}>
+                      {jobs.map((job, idx) => {
+                        const globalIdx = (byCleaner[cleaner] || []).indexOf(job);
+                        const flagged = isConflicted(job, globalIdx >= 0 ? globalIdx : idx, cleaner);
+                        return (
+                          <div key={idx} style={{
+                            padding: idx === 0 ? '0 0 6px 0' : '6px 0',
+                            borderTop: idx > 0 ? `1px dashed ${colors.ink}44` : 'none',
+                            background: flagged ? 'rgba(220, 38, 38, 0.08)' : 'transparent',
+                            borderRadius: flagged ? '4px' : 0,
+                          }}>
+                            {flagged && (
+                              <div style={{ fontSize: '10px', fontWeight: 800, color: '#991B1B', marginBottom: '2px', letterSpacing: '0.3px' }}>
+                                🚨 CONFLICT
+                              </div>
+                            )}
+                            <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '3px', color: flagged ? '#991B1B' : 'inherit' }}>{job.clientName}</div>
+                            <div style={{ fontSize: '11px', lineHeight: '1.4' }}>{job.location}</div>
+                            {job.withMaterials && <div style={{ fontSize: '10px', color: colors.accent, fontWeight: 700, marginTop: '3px' }}>w/ materials</div>}
+                            <div className="mono" style={{ fontSize: '12px', fontWeight: 600, marginTop: '4px' }}>{job.timing}</div>
+                            <div className="mono" style={{ fontSize: '12px', fontWeight: 700, color: colors.priceRed, marginTop: '3px' }}>({job.total.toFixed(0)} AED/{job.paymentType === 'CASH' ? 'C' : 'O'})</div>
+                          </div>
+                        );
+                      })}
                     </td>
                   );
                 })}
@@ -5674,7 +5852,7 @@ function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineIte
   );
 }
 
-function SettingsView({ companyInfo, saveCompanyInfo, colors, cloudStatus, lastSync, bookings, savedDays, clients, contracts, cleanerHomes, officeAddress, expenses, setCloudStatus, setLastSync }) {
+function SettingsView({ companyInfo, saveCompanyInfo, colors, cloudStatus, lastSync, bookings, savedDays, clients, contracts, cleanerHomes, officeAddress, expenses, setCloudStatus, setLastSync, smartSuggestionsOff, toggleSmartSuggestionsOff }) {
   const [info, setInfo] = React.useState(companyInfo);
   const [savedMsg, setSavedMsg] = React.useState('');
   const [migrating, setMigrating] = React.useState(false);
@@ -5847,6 +6025,34 @@ function SettingsView({ companyInfo, saveCompanyInfo, colors, cloudStatus, lastS
         <p style={{ margin: '12px 0 0', fontSize: '11px', color: colors.ink + '99', fontStyle: 'italic' }}>
           💡 First-time setup: Click "Push all local data to cloud" to upload your existing bookings, clients, contracts, expenses, and settings. After that, every change syncs automatically.
         </p>
+      </div>
+
+      {/* ===== SMART SUGGESTIONS TOGGLE (cloud-synced via companyInfo) ===== */}
+      <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px', marginBottom: '16px' }}>
+        <h3 className="display-font" style={{ margin: '0 0 4px', fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          ✨ Smart Suggestions
+        </h3>
+        <p style={{ margin: '0 0 14px', fontSize: '12px', color: colors.ink + '99' }}>
+          The Smart Day Builder analyzes your past bookings and suggests clients likely due today (based on their visit pattern). Turn it off if you prefer to add bookings manually. <strong>This setting syncs to all your devices via the cloud.</strong>
+        </p>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', padding: '10px 12px', background: smartSuggestionsOff ? '#FEE2E2' : (colors.accentLight || '#F0F8F4'), borderRadius: '8px', border: `1.5px solid ${smartSuggestionsOff ? colors.rust : colors.accent}` }}>
+          <input
+            type="checkbox"
+            checked={smartSuggestionsOff}
+            onChange={e => toggleSmartSuggestionsOff(e.target.checked)}
+            style={{ transform: 'scale(1.4)', cursor: 'pointer' }}
+          />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '14px', fontWeight: 700, color: smartSuggestionsOff ? colors.rust : colors.accent }}>
+              {smartSuggestionsOff ? '❌ Smart Suggestions are OFF (all devices)' : '✅ Smart Suggestions are ON (all devices)'}
+            </div>
+            <div style={{ fontSize: '12px', color: colors.ink + 'AA', marginTop: '2px' }}>
+              {smartSuggestionsOff
+                ? 'Hidden on the Bookings tab for every device signed into this app. Untick to turn it back on everywhere.'
+                : 'Tick the box to hide the Smart Day Builder panel on every device signed into this app.'}
+            </div>
+          </div>
+        </label>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '16px' }}>
