@@ -70,10 +70,180 @@ const emptyClient = () => ({
 
 const emptyContract = () => ({
   id: 'k_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-  clientId: null, clientName: '', cleaner: 'Leah', daysOfWeek: [], timing: '',
+  clientId: null, clientName: '',
+  // Multi-cleaner support
+  cleaner: 'Leah',
+  cleaners: ['Leah'],
+  daysOfWeek: [], timing: '',
   pricePerHour: 25, withMaterials: false, paymentType: 'ONLINE', active: true,
+  // NEW: frequency can be 'weekly' or 'biweekly'. Existing contracts migrate to 'weekly'.
+  // Biweekly uses startDate as anchor to compute which weeks are "ON".
+  frequency: 'weekly',
   startDate: new Date().toISOString().split('T')[0]
 });
+
+// Normalize older contracts on read: add cleaners[] array + default frequency='weekly'
+const normalizeContract = (c) => {
+  if (!c) return c;
+  const name = c.cleaner || 'Leah';
+  const cleaners = Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [name];
+  const frequency = c.frequency === 'biweekly' ? 'biweekly' : 'weekly';
+  const startDate = c.startDate || new Date().toISOString().split('T')[0];
+  return { ...c, cleaner: cleaners[0], cleaners, frequency, startDate };
+};
+
+// ============================================================================
+// ===== INTERVAL OVERLAP + CONFLICT DETECTION HELPERS =======================
+// ============================================================================
+
+// Parse a timing string like "8-10", "8:30-10:30", "14:00-16:00" into minutes-from-midnight.
+// Returns { start, end } where both are minutes (0..1440) or null if parsing fails.
+// Handles PM wraparound: "11-1" means 11:00 → 13:00.
+const parseTimingToMinutes = (timing) => {
+  if (!timing) return null;
+  const cleaned = String(timing).replace(/\s/g, '').toLowerCase();
+  const match = cleaned.match(/(\d+)(?::(\d+))?-(\d+)(?::(\d+))?/);
+  if (!match) return null;
+  let startH = parseInt(match[1]);
+  const startM = parseInt(match[2] || 0);
+  let endH = parseInt(match[3]);
+  const endM = parseInt(match[4] || 0);
+  if (endH < startH) endH += 12; // wrap: "11-1" → 11-13
+  const start = startH * 60 + startM;
+  const end = endH * 60 + endM;
+  if (end <= start) return null;
+  return { start, end };
+};
+
+// Format minutes-from-midnight back to "HH:MM" for display
+const formatMinutes = (m) => {
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${h}:${String(mm).padStart(2, '0')}`;
+};
+
+// Check if two time intervals overlap. CRITICAL: back-to-back (8-10 and 10-12) is NOT a conflict.
+// Logic: a conflict exists iff aStart < bEnd AND aEnd > bStart.
+const intervalsOverlap = (a, b) => {
+  if (!a || !b) return false;
+  return a.start < b.end && a.end > b.start;
+};
+
+// Decide if a biweekly contract fires on a given date.
+// Rule: the contract fires on week N if N is EVEN counting from startDate's week (0=first week).
+// So startDate = Mon 12 Oct → fires 12, 26, Nov 9, Nov 23...
+const biweeklyFiresOnDate = (contract, dateStr) => {
+  if (!contract || contract.frequency !== 'biweekly') return true; // non-biweekly: always
+  if (!contract.startDate) return true;
+  const start = new Date(contract.startDate + 'T12:00:00');
+  const target = new Date(dateStr + 'T12:00:00');
+  if (target < start) return false; // before contract started
+  // Normalize both to the Monday of their week (ISO: Monday = 1)
+  const toWeekStart = (d) => {
+    const nd = new Date(d);
+    const day = nd.getDay(); // 0=Sun, 1=Mon, ...
+    const diff = (day + 6) % 7; // days since Monday
+    nd.setDate(nd.getDate() - diff);
+    nd.setHours(0, 0, 0, 0);
+    return nd;
+  };
+  const sw = toWeekStart(start);
+  const tw = toWeekStart(target);
+  const weeksApart = Math.round((tw - sw) / (7 * 86400000));
+  return weeksApart % 2 === 0;
+};
+
+// Check if a contract would run on a given date.
+// Combines weekday match + biweekly anchor + active status.
+const contractRunsOnDate = (contract, dateStr) => {
+  if (!contract.active) return false;
+  const d = new Date(dateStr + 'T12:00:00');
+  const weekday = d.getDay();
+  if (!(contract.daysOfWeek || []).includes(weekday)) return false;
+  // Check start date
+  if (contract.startDate && dateStr < contract.startDate) return false;
+  // Biweekly check
+  if (contract.frequency === 'biweekly' && !biweeklyFiresOnDate(contract, dateStr)) return false;
+  return true;
+};
+
+// Unique booking key for duplicate prevention.
+// Based on: client identifier + date + timing + cleaner
+const bookingDedupeKey = (b, dateStr) => {
+  const clientKey = b.clientId || b.clientName || '';
+  const timingKey = (b.timing || '').replace(/\s/g, '');
+  const cleanerKey = b.cleaner || '';
+  return `${clientKey}::${dateStr}::${timingKey}::${cleanerKey}`;
+};
+
+// Find all bookings for a specific cleaner on a specific date (across saved days + today).
+// Used by conflict detection. Returns array of { timing, clientName, location, interval }.
+const findCleanerBookingsOnDate = (cleaner, dateStr, savedDays, bookings, currentDate) => {
+  const out = [];
+  const addBooking = (b) => {
+    if (!b || b.cleaner !== cleaner) return;
+    const interval = parseTimingToMinutes(b.timing);
+    if (!interval) return;
+    out.push({
+      timing: b.timing, clientName: b.clientName || '', location: b.location || '',
+      interval, bookingId: b.id,
+    });
+  };
+  // From savedDays
+  if (savedDays && savedDays[dateStr]) {
+    (savedDays[dateStr].bookings || []).forEach(addBooking);
+  }
+  // Also check current bookings if viewing dateStr (not yet saved)
+  if (currentDate === dateStr && Array.isArray(bookings)) {
+    bookings.forEach(addBooking);
+  }
+  return out;
+};
+
+// Check availability of a cleaner at a given date + timing.
+// Returns { available: bool, conflict: {timing, clientName, location, interval} | null }
+const checkCleanerAvailability = (cleaner, dateStr, requestedTiming, savedDays, bookings, currentDate, ignoreBookingId = null) => {
+  const requested = parseTimingToMinutes(requestedTiming);
+  if (!requested) return { available: true, conflict: null };
+  const existing = findCleanerBookingsOnDate(cleaner, dateStr, savedDays, bookings, currentDate);
+  for (const b of existing) {
+    if (ignoreBookingId && b.bookingId === ignoreBookingId) continue;
+    if (intervalsOverlap(b.interval, requested)) {
+      return { available: false, conflict: b };
+    }
+  }
+  return { available: true, conflict: null };
+};
+
+// For a given date + timing, list all cleaners who ARE available (no conflicts).
+// Returns array of { cleaner, available: bool, conflict: {...} | null }
+const checkAllCleanersAvailability = (allCleaners, dateStr, requestedTiming, savedDays, bookings, currentDate) => {
+  return allCleaners.map(c => {
+    const check = checkCleanerAvailability(c, dateStr, requestedTiming, savedDays, bookings, currentDate);
+    return { cleaner: c, ...check };
+  });
+};
+
+// Compute the next N dates on which a contract would fire.
+// Used for the "booking preview" when creating a contract.
+const previewContractDates = (contract, nDates = 6) => {
+  if (!contract || !contract.daysOfWeek || contract.daysOfWeek.length === 0) return [];
+  const results = [];
+  const start = new Date((contract.startDate || new Date().toISOString().split('T')[0]) + 'T12:00:00');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const cursor = new Date(Math.max(start.getTime(), today.getTime()));
+  // Scan up to 180 days ahead
+  for (let i = 0; i < 180 && results.length < nDates; i++) {
+    const dateStr = cursor.toISOString().slice(0, 10);
+    if (contractRunsOnDate(contract, dateStr)) {
+      results.push(dateStr);
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return results;
+};
+
 
 export default function CleaningApp() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -162,7 +332,11 @@ export default function CleaningApp() {
         const clientsRaw = localStorage.getItem('sparkle_clients');
         if (clientsRaw) setClients(JSON.parse(clientsRaw));
         const contractsRaw = localStorage.getItem('sparkle_contracts');
-        if (contractsRaw) setContracts(JSON.parse(contractsRaw));
+        if (contractsRaw) {
+          // Migrate on load: add cleaners[] array + default frequency='weekly' for old contracts
+          const parsed = JSON.parse(contractsRaw);
+          setContracts(Array.isArray(parsed) ? parsed.map(normalizeContract) : []);
+        }
         // Smart Day Builder: load scheduled (future) bookings from localStorage
         const scheduledRaw = localStorage.getItem('sparkle_scheduled_bookings');
         if (scheduledRaw) setScheduledBookings(JSON.parse(scheduledRaw));
@@ -212,11 +386,14 @@ export default function CleaningApp() {
         // Contracts
         const { data: contractsData, error: contractsErr } = await supabase.from('contracts').select('*');
         if (!contractsErr && contractsData) {
-          const cs = contractsData.map(c => ({
+          const cs = contractsData.map(c => normalizeContract({
             id: c.id, clientId: c.client_id, clientName: c.client_name, cleaner: c.cleaner,
+            cleaners: Array.isArray(c.cleaners) ? c.cleaners : undefined,
             daysOfWeek: c.days_of_week || [], timing: c.timing || '',
             pricePerHour: c.price_per_hour || 25, withMaterials: c.with_materials || false,
             paymentType: c.payment_type || 'ONLINE', active: c.active !== false,
+            // NEW: frequency column. If not in DB yet (older schema), defaults to 'weekly'.
+            frequency: c.frequency || 'weekly',
             startDate: c.start_date || ''
           }));
           setContracts(cs);
@@ -450,10 +627,17 @@ export default function CleaningApp() {
       }
       if (next.length > 0) {
         const rows = next.map(c => ({
-          id: c.id, client_id: c.clientId, client_name: c.clientName, cleaner: c.cleaner,
+          id: c.id, client_id: c.clientId, client_name: c.clientName,
+          // Backward compat: save both `cleaner` (string) and `cleaners` (jsonb array)
+          cleaner: c.cleaner,
+          cleaners: Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [c.cleaner].filter(Boolean),
           days_of_week: c.daysOfWeek || [], timing: c.timing || '',
           price_per_hour: c.pricePerHour || 25, with_materials: c.withMaterials || false,
           payment_type: c.paymentType || 'ONLINE', active: c.active !== false,
+          // NEW: frequency column. If Supabase doesn't have this column yet, Supabase ignores it.
+          // To sync frequency across devices, run once in SQL Editor:
+          //   ALTER TABLE contracts ADD COLUMN IF NOT EXISTS frequency TEXT DEFAULT 'weekly';
+          frequency: c.frequency || 'weekly',
           start_date: c.startDate || null
         }));
         const { error } = await supabase.from('contracts').upsert(rows);
@@ -657,17 +841,38 @@ export default function CleaningApp() {
   };
 
   const generateFromContracts = () => {
-    const dayOfWeek = new Date(date).getDay();
-    const matching = contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek));
+    // CRITICAL: use contractRunsOnDate which respects frequency (weekly/biweekly) + startDate
+    const matching = contracts.filter(c => contractRunsOnDate(c, date));
     if (matching.length === 0) { showStatus('No contracts for this day'); return; }
-    const existingClientIds = new Set(bookings.map(b => b.clientId).filter(Boolean));
-    const newBookings = matching.filter(c => !existingClientIds.has(c.clientId)).map(c => {
+    // Dedupe by unique key (clientId + cleaner + timing) so re-running is safe.
+    const existingKeys = new Set(
+      bookings.filter(b => b.clientName || b.clientId).map(b => bookingDedupeKey(b, date))
+    );
+    const newBookings = [];
+    matching.forEach(c => {
       const client = clients.find(cl => cl.id === c.clientId);
-      return {
-        ...emptyBooking(), cleaner: c.cleaner, timing: c.timing, clientId: c.clientId,
-        clientName: c.clientName, location: client?.address || '', phone: client?.phone || '',
-        pricePerHour: c.pricePerHour, withMaterials: c.withMaterials, paymentType: c.paymentType,
-      };
+      // Multi-cleaner: one booking per cleaner on the contract
+      const cleaners = Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [c.cleaner];
+      cleaners.forEach(cleanerName => {
+        const trial = {
+          ...emptyBooking(),
+          cleaner: cleanerName,
+          timing: c.timing,
+          clientId: c.clientId,
+          clientName: c.clientName,
+        };
+        if (existingKeys.has(bookingDedupeKey(trial, date))) return;
+        existingKeys.add(bookingDedupeKey(trial, date));
+        newBookings.push({
+          ...trial,
+          location: client?.address || '',
+          phone: client?.phone || '',
+          lat: client?.lat, lng: client?.lng,
+          pricePerHour: c.pricePerHour,
+          withMaterials: c.withMaterials,
+          paymentType: c.paymentType,
+        });
+      });
     });
     if (newBookings.length === 0) { showStatus('Already added'); return; }
     const cleanedExisting = bookings.filter(b => b.clientName || b.location);
@@ -844,33 +1049,39 @@ export default function CleaningApp() {
     autoRunDates.add(date);
     setSmartBuilderDismissed(false);
 
-    const dayOfWeek = new Date(date + 'T12:00:00').getDay();
-    const existingPairs = new Set(
-      bookings.filter(b => b.clientId && b.cleaner).map(b => `${b.clientId}::${b.cleaner}`)
+    // Build unique dedupe key set based on (client + date + timing + cleaner)
+    const existingKeys = new Set(
+      bookings.filter(b => b.clientName || b.clientId).map(b => bookingDedupeKey(b, date))
     );
     const toAdd = [];
 
-    // 1. Contracts matching today's weekday
-    contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek)).forEach(c => {
-      const key = `${c.clientId}::${c.cleaner}`;
-      if (existingPairs.has(key)) return;
-      existingPairs.add(key);
+    // 1. Contracts matching today — use contractRunsOnDate (handles weekly/biweekly/startDate)
+    contracts.filter(c => contractRunsOnDate(c, date)).forEach(c => {
       const client = clients.find(cl => cl.id === c.clientId);
-      toAdd.push({
-        ...emptyBooking(),
-        cleaner: c.cleaner, timing: c.timing, clientId: c.clientId,
-        clientName: c.clientName, location: client?.address || '', phone: client?.phone || '',
-        lat: client?.lat, lng: client?.lng,
-        pricePerHour: c.pricePerHour, withMaterials: c.withMaterials, paymentType: c.paymentType,
-        source: 'contract',
+      // Multi-cleaner: one booking per cleaner on the contract
+      const cleaners = Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [c.cleaner];
+      cleaners.forEach(cleanerName => {
+        const trial = {
+          cleaner: cleanerName, timing: c.timing, clientId: c.clientId, clientName: c.clientName,
+        };
+        if (existingKeys.has(bookingDedupeKey(trial, date))) return;
+        existingKeys.add(bookingDedupeKey(trial, date));
+        toAdd.push({
+          ...emptyBooking(),
+          ...trial,
+          location: client?.address || '', phone: client?.phone || '',
+          lat: client?.lat, lng: client?.lng,
+          pricePerHour: c.pricePerHour, withMaterials: c.withMaterials, paymentType: c.paymentType,
+          source: 'contract',
+        });
       });
     });
 
     // 2. Pre-scheduled bookings for today
     scheduledBookings.filter(s => s.date === date && s.status === 'pending' && !s.autoAdded).forEach(s => {
-      const key = `${s.clientId || s.clientName}::${s.cleaner}`;
-      if (existingPairs.has(key)) return;
-      existingPairs.add(key);
+      const trial = { cleaner: s.cleaner, timing: s.timing, clientId: s.clientId, clientName: s.clientName };
+      if (existingKeys.has(bookingDedupeKey(trial, date))) return;
+      existingKeys.add(bookingDedupeKey(trial, date));
       toAdd.push({
         ...emptyBooking(),
         cleaner: s.cleaner, timing: s.timing, clientId: s.clientId,
@@ -1817,7 +2028,7 @@ export default function CleaningApp() {
         {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
         {view === 'cleaners' && <CleanersView cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} />}
         {view === 'staff-links' && <StaffLinksView allCleaners={allCleaners} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
-        {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} allCleaners={allCleaners} exportContractsExcel={exportContractsExcel} />}
+        {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} allCleaners={allCleaners} exportContractsExcel={exportContractsExcel} savedDays={savedDays} bookings={bookings} currentDate={date} />}
         {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
         {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
@@ -2522,24 +2733,115 @@ function ClientPickerModal({ clients, onPick, onClose, colors }) {
   );
 }
 
-function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, allCleaners, exportContractsExcel }) {
+function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, allCleaners, exportContractsExcel, savedDays, bookings, currentDate }) {
   const [editing, setEditing] = useState(null);
+
+  // Conflict detection state — set when a conflict is found during save/check
+  const [conflictModal, setConflictModal] = React.useState(null);
+  const [previewExpanded, setPreviewExpanded] = React.useState(false);
+  const [cleanerScheduleModal, setCleanerScheduleModal] = React.useState(null);
 
   const startNew = () => {
     if (clients.length === 0) return alert('Add at least one client first in the Clients tab');
     setEditing(emptyContract());
   };
-  const startEdit = (c) => setEditing({ ...c });
+  // Normalize older contracts on edit so the form sees `cleaners[]` + `frequency`
+  const startEdit = (c) => setEditing({ ...normalizeContract(c) });
 
+  // Toggle a cleaner in the editing contract's cleaners[] array
+  const toggleCleaner = (name) => {
+    const current = Array.isArray(editing.cleaners) ? editing.cleaners : [editing.cleaner].filter(Boolean);
+    const has = current.includes(name);
+    if (has) {
+      if (current.length <= 1) {
+        alert('A contract needs at least one assigned cleaner.');
+        return;
+      }
+      setEditing({ ...editing, cleaners: current.filter(c => c !== name) });
+    } else {
+      setEditing({ ...editing, cleaners: [...current, name] });
+    }
+  };
+
+  // Build an array of { date, status: 'ok'|'conflict'|'skipped', conflict: {...} } for preview
+  // Also used for the actual save-time conflict check.
+  const buildAvailabilityReport = (contract) => {
+    if (!contract || !contract.daysOfWeek || contract.daysOfWeek.length === 0) return [];
+    const cleaners = Array.isArray(contract.cleaners) && contract.cleaners.length > 0
+      ? contract.cleaners
+      : [contract.cleaner].filter(Boolean);
+    const dates = previewContractDates(contract, 8);
+    const report = [];
+    dates.forEach(dateStr => {
+      // Check each assigned cleaner independently
+      cleaners.forEach(cleanerName => {
+        const check = checkCleanerAvailability(cleanerName, dateStr, contract.timing, savedDays, bookings, currentDate);
+        report.push({
+          date: dateStr,
+          cleaner: cleanerName,
+          available: check.available,
+          conflict: check.conflict,
+        });
+      });
+    });
+    return report;
+  };
+
+  // Core save with conflict detection
   const save = () => {
     if (!editing.clientId) return alert('Pick a client');
     if (editing.daysOfWeek.length === 0) return alert('Pick at least one day');
     if (!editing.timing) return alert('Add timing');
-    const client = clients.find(c => c.id === editing.clientId);
-    const final = { ...editing, clientName: client.name };
-    const exists = contracts.find(c => c.id === editing.id);
-    saveContracts(exists ? contracts.map(c => c.id === editing.id ? final : c) : [...contracts, final]);
+    if (!parseTimingToMinutes(editing.timing)) return alert('Timing format invalid. Use "8-10" or "8:30-10:30"');
+    const cleaners = Array.isArray(editing.cleaners) && editing.cleaners.length > 0
+      ? editing.cleaners
+      : [editing.cleaner || 'Leah'];
+
+    // Check availability for every assigned cleaner on every scheduled date
+    const normalized = { ...editing, cleaners, cleaner: cleaners[0] };
+    const report = buildAvailabilityReport(normalized);
+    const conflicts = report.filter(r => !r.available);
+    if (conflicts.length > 0) {
+      // Show conflict modal — user must resolve or override before saving
+      setConflictModal({ contract: normalized, report, conflicts });
+      return;
+    }
+    // No conflicts — save straight through
+    commitSave(normalized);
+  };
+
+  // Actually commit the contract to storage (after conflict resolution or clean save)
+  const commitSave = (contractToSave) => {
+    const client = clients.find(c => c.id === contractToSave.clientId);
+    const final = {
+      ...contractToSave,
+      clientName: client.name,
+      cleaner: (contractToSave.cleaners && contractToSave.cleaners[0]) || contractToSave.cleaner || 'Leah',
+    };
+    const exists = contracts.find(c => c.id === contractToSave.id);
+    saveContracts(exists ? contracts.map(c => c.id === contractToSave.id ? final : c) : [...contracts, final]);
     setEditing(null);
+    setConflictModal(null);
+    setPreviewExpanded(false);
+  };
+
+  // "Check Availability" button handler — runs the check and shows result inline
+  const runAvailabilityCheck = () => {
+    if (!editing.clientId) return alert('Pick a client first');
+    if (editing.daysOfWeek.length === 0) return alert('Pick at least one day first');
+    if (!editing.timing) return alert('Add timing first');
+    if (!parseTimingToMinutes(editing.timing)) return alert('Timing format invalid');
+    const cleaners = Array.isArray(editing.cleaners) && editing.cleaners.length > 0
+      ? editing.cleaners : [editing.cleaner || 'Leah'];
+    const normalized = { ...editing, cleaners };
+    const report = buildAvailabilityReport(normalized);
+    const conflicts = report.filter(r => !r.available);
+    if (conflicts.length === 0) {
+      alert(`✅ READY\n\n${cleaners.join(' + ')}\n${normalized.timing}\n\nChecked next ${Math.round(report.length / cleaners.length)} occurrences — no conflicts found.`);
+    } else {
+      setConflictModal({ contract: normalized, report, conflicts });
+    }
+    setPreviewExpanded(true);
   };
 
   const toggleDay = (dayIdx) => {
@@ -2573,57 +2875,111 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, al
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        {contracts.map(c => (
-          <div key={c.id} style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', opacity: c.active ? 1 : 0.55 }}>
-            <div style={{ flex: 1, minWidth: '240px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
-                <div className="display-font" style={{ fontSize: '17px', fontWeight: 700 }}>{c.clientName}</div>
-                {!c.active && <span className="badge" style={{ background: '#FEE2E2', color: colors.rust }}>PAUSED</span>}
+        {contracts.map(c => {
+          const n = normalizeContract(c);
+          const cleanerList = Array.isArray(n.cleaners) && n.cleaners.length > 0 ? n.cleaners : [n.cleaner].filter(Boolean);
+          const isTeam = cleanerList.length > 1;
+          const isBiweekly = n.frequency === 'biweekly';
+          return (
+            <div key={c.id} style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '10px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', opacity: c.active ? 1 : 0.55 }}>
+              <div style={{ flex: 1, minWidth: '240px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
+                  <div className="display-font" style={{ fontSize: '17px', fontWeight: 700 }}>{c.clientName}</div>
+                  {isTeam && <span className="badge" style={{ background: '#DBEAFE', color: '#1E40AF', fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px' }}>TEAM OF {cleanerList.length}</span>}
+                  <span className="badge" style={{
+                    background: isBiweekly ? '#FEF3C7' : (colors.accentLight || '#F0F8F4'),
+                    color: isBiweekly ? '#92400E' : (colors.accent || '#16a34a'),
+                    fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px'
+                  }}>{isBiweekly ? 'BIWEEKLY' : 'WEEKLY'}</span>
+                  {!c.active && <span className="badge" style={{ background: '#FEE2E2', color: colors.rust, fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px' }}>PAUSED</span>}
+                </div>
+                <div style={{ fontSize: '12px', color: colors.ink + 'AA', display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+                  <span><strong>{cleanerList.join(' + ')}</strong></span>
+                  <span className="mono">{c.timing}</span>
+                  <span>{(c.daysOfWeek || []).map(d => DAYS[d]).join(', ')}</span>
+                  <span style={{ color: colors.accent, fontWeight: 600 }}>{c.pricePerHour} AED/hr</span>
+                  {c.withMaterials && <span style={{ color: colors.accent }}>w/ materials</span>}
+                  <span>{c.paymentType}</span>
+                  {n.startDate && <span style={{ color: colors.ink + '77' }}>since {n.startDate}</span>}
+                </div>
               </div>
-              <div style={{ fontSize: '12px', color: colors.ink + 'AA', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-                <span><strong>{c.cleaner}</strong></span>
-                <span className="mono">{c.timing}</span>
-                <span>{c.daysOfWeek.map(d => DAYS[d]).join(', ')}</span>
-                <span style={{ color: colors.accent, fontWeight: 600 }}>{c.pricePerHour} AED/hr</span>
-                {c.withMaterials && <span style={{ color: colors.accent }}>w/ materials</span>}
-                <span>{c.paymentType}</span>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button className="btn btn-sm" onClick={() => toggleActive(c.id)}>{c.active ? 'Pause' : 'Resume'}</button>
+                <button className="btn btn-sm" onClick={() => startEdit(c)}><Edit2 size={12} /></button>
+                <button className="btn btn-danger btn-sm" onClick={() => remove(c.id)} style={{ padding: '6px 8px' }}><Trash2 size={12} /></button>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: '6px' }}>
-              <button className="btn btn-sm" onClick={() => toggleActive(c.id)}>{c.active ? 'Pause' : 'Resume'}</button>
-              <button className="btn btn-sm" onClick={() => startEdit(c)}><Edit2 size={12} /></button>
-              <button className="btn btn-danger btn-sm" onClick={() => remove(c.id)} style={{ padding: '6px 8px' }}><Trash2 size={12} /></button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {editing && (
         <div className="modal-overlay" onClick={() => setEditing(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '680px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h3 className="display-font" style={{ margin: 0, fontSize: '22px', fontWeight: 700 }}>{contracts.find(c => c.id === editing.id) ? 'Edit Contract' : 'New Contract'}</h3>
               <button className="btn btn-sm" onClick={() => setEditing(null)} style={{ padding: '6px' }}><X size={14} /></button>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               <Field label="Client *">
                 <select className="select" value={editing.clientId || ''} onChange={e => setEditing({ ...editing, clientId: e.target.value })}>
                   <option value="">— Pick a client —</option>
                   {clients.map(c => <option key={c.id} value={c.id}>{c.name} · {c.address}</option>)}
                 </select>
               </Field>
-              <Field label="Assigned Cleaner *">
-                <select className="select" value={editing.cleaner} onChange={e => setEditing({ ...editing, cleaner: e.target.value })}>
-                  {/* Preserve current cleaner even if not in the active roster */}
-                  {editing.cleaner && !(allCleaners || CLEANERS).includes(editing.cleaner) && <option key={editing.cleaner}>{editing.cleaner}</option>}
-                  {(allCleaners || CLEANERS).map(c => <option key={c}>{c}</option>)}
-                </select>
+
+              {/* MULTI-CLEANER CHIPS */}
+              <Field label={`Assigned Cleaner${(editing.cleaners || []).length > 1 ? 's' : ''} * — tap to add or remove`}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '4px 0' }}>
+                  {(() => {
+                    const roster = allCleaners || CLEANERS || [];
+                    const list = Array.isArray(editing.cleaners) && editing.cleaners.length > 0
+                      ? editing.cleaners : [editing.cleaner].filter(Boolean);
+                    const extras = list.filter(n => !roster.includes(n));
+                    return [...roster, ...extras].map(name => {
+                      const picked = list.includes(name);
+                      return (
+                        <button key={name} type="button" onClick={() => toggleCleaner(name)}
+                          style={{
+                            padding: '7px 14px', borderRadius: '20px',
+                            border: `1.5px solid ${picked ? colors.accent : colors.border}`,
+                            background: picked ? colors.accent : 'white',
+                            color: picked ? 'white' : colors.ink,
+                            fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+                            display: 'inline-flex', alignItems: 'center', gap: '5px',
+                          }}>
+                          {picked && <span style={{ fontSize: '11px' }}>✓</span>}{name}
+                        </button>
+                      );
+                    });
+                  })()}
+                </div>
+                {(editing.cleaners || []).length > 1 && (
+                  <div style={{ fontSize: '11px', color: colors.ink + '99', marginTop: '8px', padding: '6px 10px', background: (colors.accentLight || '#F0F8F4'), borderRadius: '6px' }}>
+                    💡 This team contract creates <strong>{editing.cleaners.length} separate bookings</strong> each run — one per cleaner. All at same time &amp; client. Each cleaner's availability is checked independently.
+                  </div>
+                )}
               </Field>
+
+              {/* FREQUENCY (NEW) */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <Field label="Frequency *">
+                  <select className="select" value={editing.frequency || 'weekly'} onChange={e => setEditing({ ...editing, frequency: e.target.value })}>
+                    <option value="weekly">Weekly (every week)</option>
+                    <option value="biweekly">Biweekly (every 2 weeks)</option>
+                  </select>
+                </Field>
+                <Field label={editing.frequency === 'biweekly' ? 'Anchor date * (biweekly starts from this week)' : 'Start date'}>
+                  <input className="input" type="date" value={editing.startDate || ''} onChange={e => setEditing({ ...editing, startDate: e.target.value })} />
+                </Field>
+              </div>
+
               <Field label="Days of week *">
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   {DAYS.map((d, i) => <button key={i} type="button" className={`day-pill ${editing.daysOfWeek.includes(i) ? 'active' : ''}`} onClick={() => toggleDay(i)}>{d}</button>)}
                 </div>
               </Field>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <Field label="Timing *"><input className="input" placeholder="8:00-10:00" value={editing.timing} onChange={e => setEditing({ ...editing, timing: e.target.value })} /></Field>
                 <Field label="Rate/hr"><input className="input" type="number" value={editing.pricePerHour} onChange={e => setEditing({ ...editing, pricePerHour: parseFloat(e.target.value) || 0 })} /></Field>
@@ -2632,14 +2988,143 @@ function ContractsView({ contracts, saveContracts, clients, colors, CLEANERS, al
                 <Field label="Payment Type"><select className="select" value={editing.paymentType} onChange={e => setEditing({ ...editing, paymentType: e.target.value })}>{PAYMENT_TYPES.map(p => <option key={p}>{p}</option>)}</select></Field>
                 <Field label="Materials"><label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 0', fontSize: '13px' }}><input type="checkbox" checked={editing.withMaterials} onChange={e => setEditing({ ...editing, withMaterials: e.target.checked })} style={{ transform: 'scale(1.2)' }} />With materials</label></Field>
               </div>
+
+              {/* BOOKING PREVIEW — next 6 occurrences with availability status */}
+              {editing.clientId && editing.daysOfWeek.length > 0 && editing.timing && (
+                <div style={{ border: `1.5px solid ${colors.border}`, borderRadius: '10px', background: colors.soft, padding: '10px 14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => setPreviewExpanded(!previewExpanded)}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: colors.ink + 'CC' }}>
+                      📅 Next bookings preview ({editing.frequency === 'biweekly' ? 'biweekly' : 'weekly'})
+                    </div>
+                    <div style={{ fontSize: '12px', color: colors.accent }}>{previewExpanded ? '▲ hide' : '▼ show'}</div>
+                  </div>
+                  {previewExpanded && (() => {
+                    const cleaners = Array.isArray(editing.cleaners) && editing.cleaners.length > 0 ? editing.cleaners : [editing.cleaner].filter(Boolean);
+                    const dates = previewContractDates({ ...editing, cleaners }, 6);
+                    if (dates.length === 0) return <div style={{ fontSize: '12px', color: colors.ink + '77', marginTop: '8px' }}>No upcoming dates. Pick days of week + start date.</div>;
+                    return (
+                      <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        {dates.map(dateStr => {
+                          const d = new Date(dateStr + 'T12:00:00');
+                          const label = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+                          // Check conflicts across all cleaners
+                          const checks = cleaners.map(cl => ({
+                            cleaner: cl,
+                            ...checkCleanerAvailability(cl, dateStr, editing.timing, savedDays, bookings, currentDate)
+                          }));
+                          const anyConflict = checks.some(c => !c.available);
+                          return (
+                            <div key={dateStr} style={{ fontSize: '12px', display: 'flex', gap: '10px', padding: '6px 10px', background: 'white', borderRadius: '6px', border: `1px solid ${colors.border}` }}>
+                              <span className="mono" style={{ fontWeight: 700, minWidth: '100px' }}>{label}</span>
+                              <span>{editing.timing}</span>
+                              <span style={{ flex: 1, color: colors.ink + '99' }}>{cleaners.join(' + ')}</span>
+                              {anyConflict ? (
+                                <span style={{ color: colors.rust, fontWeight: 700 }}>❌ CONFLICT</span>
+                              ) : (
+                                <span style={{ color: colors.accent, fontWeight: 700 }}>✅ OK</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '20px' }}>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '20px', flexWrap: 'wrap' }}>
               <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn" onClick={runAvailabilityCheck} style={{ borderColor: colors.gold, color: colors.gold }}>🔍 Check Availability</button>
               <button className="btn btn-primary" onClick={save}><Save size={14} /> Save Contract</button>
             </div>
           </div>
         </div>
       )}
+
+      {/* ============ CONFLICT RESOLUTION MODAL ============ */}
+      {conflictModal && (
+        <div className="modal-overlay" onClick={() => setConflictModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '620px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 className="display-font" style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#B45309' }}>
+                ⚠️ Cleaner conflict detected
+              </h3>
+              <button className="btn btn-sm" onClick={() => setConflictModal(null)}><X size={14} /></button>
+            </div>
+            <div style={{ padding: '12px 16px', background: '#FEF3C7', border: '1.5px solid #F59E0B', borderRadius: '10px', marginBottom: '14px', fontSize: '13px', color: '#78350F' }}>
+              Found <strong>{conflictModal.conflicts.length}</strong> conflict{conflictModal.conflicts.length > 1 ? 's' : ''} on upcoming dates. Each cleaner is checked independently. If a cleaner is already busy at the requested time, you'll see it below.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
+              {conflictModal.report.map((r, idx) => {
+                const d = new Date(r.date + 'T12:00:00');
+                const label = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+                return (
+                  <div key={idx} style={{ padding: '10px 14px', background: r.available ? '#F0FDF4' : '#FEE2E2', borderRadius: '8px', border: `1px solid ${r.available ? '#86EFAC' : '#FCA5A5'}` }}>
+                    <div style={{ fontSize: '13px', fontWeight: 700, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span>{label} · <span className="mono">{conflictModal.contract.timing}</span> · {r.cleaner}</span>
+                      {r.available ? <span style={{ color: '#166534' }}>✅ Available</span> : <span style={{ color: '#991B1B' }}>❌ Conflict</span>}
+                    </div>
+                    {!r.available && r.conflict && (
+                      <div style={{ fontSize: '12px', color: '#7F1D1D', marginTop: '6px' }}>
+                        <strong>Already assigned to:</strong> {r.conflict.clientName} · <span className="mono">{r.conflict.timing}</span>
+                        {r.conflict.location && <div style={{ color: '#991B1B' }}>📍 {r.conflict.location}</div>}
+                      </div>
+                    )}
+                    {!r.available && (
+                      <button className="btn btn-sm" style={{ marginTop: '8px', fontSize: '11px', padding: '4px 10px' }} onClick={() => setCleanerScheduleModal({ cleaner: r.cleaner, date: r.date })}>
+                        View {r.cleaner}'s schedule for {label}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '18px', paddingTop: '14px', borderTop: `1px solid ${colors.border}`, flexWrap: 'wrap' }}>
+              <button className="btn" onClick={() => setConflictModal(null)}>← Change timing / cleaner</button>
+              <button className="btn" style={{ background: '#F59E0B', color: 'white', borderColor: '#F59E0B' }} onClick={() => commitSave(conflictModal.contract)}>
+                Continue anyway (I'll handle overlaps manually)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============ CLEANER SCHEDULE MODAL ============ */}
+      {cleanerScheduleModal && (() => {
+        const scheduleList = findCleanerBookingsOnDate(cleanerScheduleModal.cleaner, cleanerScheduleModal.date, savedDays, bookings, currentDate);
+        const d = new Date(cleanerScheduleModal.date + 'T12:00:00');
+        const label = d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+        return (
+          <div className="modal-overlay" onClick={() => setCleanerScheduleModal(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3 className="display-font" style={{ margin: 0, fontSize: '19px', fontWeight: 700 }}>
+                  {cleanerScheduleModal.cleaner}'s schedule
+                </h3>
+                <button className="btn btn-sm" onClick={() => setCleanerScheduleModal(null)}><X size={14} /></button>
+              </div>
+              <div style={{ fontSize: '13px', color: colors.ink + '99', marginBottom: '12px' }}>{label}</div>
+              {scheduleList.length === 0 ? (
+                <div style={{ padding: '20px', textAlign: 'center', color: colors.ink + '77', background: colors.soft, borderRadius: '8px' }}>
+                  No bookings scheduled for this day.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {scheduleList.sort((a, b) => a.interval.start - b.interval.start).map((b, idx) => (
+                    <div key={idx} style={{ padding: '10px 14px', background: 'white', border: `1px solid ${colors.border}`, borderRadius: '8px' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 700, display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        <span className="mono" style={{ color: colors.accent }}>{formatMinutes(b.interval.start)}–{formatMinutes(b.interval.end)}</span>
+                        <span>{b.clientName}</span>
+                      </div>
+                      {b.location && <div style={{ fontSize: '11px', color: colors.ink + '99', marginTop: '2px' }}>📍 {b.location}</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
