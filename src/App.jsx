@@ -369,10 +369,182 @@ const buildDailyPlan = (patterns, targetDateStr, savedDays, currentBookings, cur
     .filter(r => r.match || r.isBooked);
 };
 
+// ===== PASSWORD GATE HELPERS =====
+// Hashes a plaintext password with SHA-256 and returns a hex string.
+// This way the password never gets stored in plaintext anywhere.
+const sha256Hex = async (plain) => {
+  if (!plain) return '';
+  const bytes = new TextEncoder().encode(plain);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+};
+
+// Password gate screen — shown before the main app renders when the user hasn't
+// authenticated this session. Handles both "first-time setup" (no password yet)
+// and "returning user" (password already set).
+function PasswordGate({ companyInfo, saveCompanyInfo, onAuthenticated, colors }) {
+  const [mode, setMode] = React.useState(companyInfo?.appPasswordHash ? 'enter' : 'setup');
+  const [pwd, setPwd] = React.useState('');
+  const [pwd2, setPwd2] = React.useState('');
+  const [error, setError] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [rememberMe, setRememberMe] = React.useState(true);
+
+  const submit = async (e) => {
+    e?.preventDefault();
+    setError('');
+    if (mode === 'setup') {
+      if (!pwd || pwd.length < 4) { setError('Password must be at least 4 characters'); return; }
+      if (pwd !== pwd2) { setError('Passwords don’t match'); return; }
+      setBusy(true);
+      try {
+        const hash = await sha256Hex(pwd);
+        await saveCompanyInfo({ ...companyInfo, appPasswordHash: hash });
+        if (rememberMe) { try { localStorage.setItem('sparkle_authed', '1'); } catch (e) {} }
+        onAuthenticated();
+      } catch (err) {
+        setError('Could not save password. Check your connection.');
+      }
+      setBusy(false);
+    } else {
+      setBusy(true);
+      const hash = await sha256Hex(pwd);
+      if (hash === companyInfo.appPasswordHash) {
+        if (rememberMe) { try { localStorage.setItem('sparkle_authed', '1'); } catch (e) {} }
+        onAuthenticated();
+      } else {
+        setError('Incorrect password');
+      }
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      background: `linear-gradient(135deg, ${colors.accent}, #0b3a2c)`,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '20px',
+      fontFamily: 'inherit',
+    }}>
+      <div style={{
+        background: 'white',
+        borderRadius: '16px',
+        padding: '40px 36px',
+        maxWidth: '420px',
+        width: '100%',
+        boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
+      }}>
+        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+          {companyInfo?.logoDataUrl && (
+            <img src={companyInfo.logoDataUrl} alt="logo" style={{ width: '64px', height: '64px', objectFit: 'contain', borderRadius: '12px', background: 'white', border: `1px solid ${colors.border}`, padding: '6px', marginBottom: '12px' }} />
+          )}
+          <h1 className="display-font" style={{ margin: 0, fontSize: '26px', fontWeight: 800, color: colors.accent }}>
+            {companyInfo?.name || 'AR Cleaning Services'}
+          </h1>
+          <p style={{ margin: '6px 0 0', fontSize: '13px', color: colors.ink + '99' }}>
+            {mode === 'setup' ? 'First-time setup — create a password' : 'Enter your password to continue'}
+          </p>
+        </div>
+
+        <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div>
+            <label style={{ fontSize: '12px', fontWeight: 700, color: colors.ink, display: 'block', marginBottom: '6px' }}>
+              {mode === 'setup' ? 'Create password' : 'Password'}
+            </label>
+            <input
+              type="password"
+              className="input"
+              value={pwd}
+              onChange={e => setPwd(e.target.value)}
+              autoFocus
+              placeholder={mode === 'setup' ? 'At least 4 characters' : 'Enter password'}
+              style={{ fontSize: '16px', padding: '12px 14px', width: '100%' }}
+            />
+          </div>
+          {mode === 'setup' && (
+            <div>
+              <label style={{ fontSize: '12px', fontWeight: 700, color: colors.ink, display: 'block', marginBottom: '6px' }}>Confirm password</label>
+              <input
+                type="password"
+                className="input"
+                value={pwd2}
+                onChange={e => setPwd2(e.target.value)}
+                placeholder="Type the password again"
+                style={{ fontSize: '16px', padding: '12px 14px', width: '100%' }}
+              />
+            </div>
+          )}
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: colors.ink + 'CC', cursor: 'pointer' }}>
+            <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} style={{ transform: 'scale(1.1)' }} />
+            Keep me signed in on this device
+          </label>
+          {error && (
+            <div style={{ background: '#FEE2E2', color: '#991B1B', padding: '10px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 600 }}>
+              {error}
+            </div>
+          )}
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={busy}
+            style={{ fontSize: '15px', padding: '12px', fontWeight: 700, marginTop: '4px' }}
+          >
+            {busy ? 'Please wait…' : (mode === 'setup' ? 'Set password & continue' : 'Unlock app')}
+          </button>
+        </form>
+
+        <p style={{ margin: '20px 0 0', fontSize: '11px', color: colors.ink + '77', textAlign: 'center' }}>
+          {mode === 'setup'
+            ? '🔒 This password syncs across all your devices. Keep it safe — recovery requires Supabase access.'
+            : 'Forgot your password? Reset it in Supabase SQL Editor by clearing appPasswordHash from the company table.'}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ===== ADMIN URL DETECTION =====
+// If the URL contains ?admin, ?role=admin, or #admin → the user sees only
+// the Bookings, Plan, Deployment and Pending tabs. Owner sees all tabs.
+// This is a soft gate for UI simplicity, not security — anyone who edits the
+// URL can see the owner view. For real security, add Supabase Auth later.
+const detectIsAdminMode = () => {
+  try {
+    const search = (typeof window !== 'undefined' && window.location.search) || '';
+    const hash = (typeof window !== 'undefined' && window.location.hash) || '';
+    if (/[?&]admin(=|&|$)/i.test(search)) return true;
+    if (/[?&]role=admin\b/i.test(search)) return true;
+    if (/#admin\b/i.test(hash)) return true;
+    return false;
+  } catch (e) { return false; }
+};
+const ADMIN_ALLOWED_VIEWS = ['input', 'plan', 'deployment', 'pending'];
+
 export default function CleaningApp() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [bookings, setBookings] = useState([emptyBooking()]);
   const [view, setView] = useState('input');
+  // Admin mode = computed once at mount from the URL
+  const isAdminMode = React.useMemo(detectIsAdminMode, []);
+  // Guard: if admin somehow has `view` pointing to a restricted tab, force to 'input'
+  React.useEffect(() => {
+    if (isAdminMode && !ADMIN_ALLOWED_VIEWS.includes(view)) {
+      setView('input');
+    }
+  }, [isAdminMode, view]);
+  // ===== APP-WIDE PASSWORD GATE =====
+  // Session flag — true after the user types the correct password this session.
+  // Stored in localStorage so a device "remembers" its login until Logout.
+  const [isAuthed, setIsAuthed] = useState(() => {
+    try { return localStorage.getItem('sparkle_authed') === '1'; } catch (e) { return false; }
+  });
+  const logout = () => {
+    try { localStorage.removeItem('sparkle_authed'); } catch (e) {}
+    setIsAuthed(false);
+  };
   const [savedDays, setSavedDays] = useState({});
   const [clients, setClients] = useState([]);
   const [contracts, setContracts] = useState([]);
@@ -695,6 +867,14 @@ export default function CleaningApp() {
   };
 
   const saveDay = async () => {
+    // ADMIN GUARD: block saving to any past date
+    if (isAdminMode) {
+      const today = new Date().toISOString().split('T')[0];
+      if (date < today) {
+        alert('Admin cannot modify past bookings. This day is read-only.');
+        return;
+      }
+    }
     const newSaved = { ...savedDays, [date]: { bookings, savedAt: new Date().toISOString() } };
     setSavedDays(newSaved);
     try { localStorage.setItem('sparkle_all_days', JSON.stringify(newSaved)); } catch (e) {}
@@ -719,12 +899,25 @@ export default function CleaningApp() {
   const clearDay = () => { if (confirm('Clear bookings for this day?')) setBookings([emptyBooking()]); };
 
   const loadDate = (d) => {
+    // ADMIN GUARD: block navigation to any date older than today
+    if (isAdminMode) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      if (d < todayStr) {
+        alert('Admin access is limited to today and future dates. Past dates are view-only via the owner account.');
+        return;
+      }
+    }
     setDate(d);
     if (savedDays[d]) setBookings(savedDays[d].bookings);
     else setBookings([emptyBooking()]);
   };
 
+  // Compute the current day's read-only status for admin
+  const todayStr = new Date().toISOString().split('T')[0];
+  const isDayReadOnlyForAdmin = isAdminMode && date < todayStr;
+
   const saveClients = async (next) => {
+    if (isAdminMode) { alert('Admin cannot modify the clients list.'); return; }
     setClients(next);
     try { localStorage.setItem('sparkle_clients', JSON.stringify(next)); } catch (e) {}
     setCloudStatus('syncing');
@@ -756,6 +949,7 @@ export default function CleaningApp() {
   };
 
   const saveContracts = async (next) => {
+    if (isAdminMode) { alert('Admin cannot modify contracts.'); return; }
     setContracts(next);
     try { localStorage.setItem('sparkle_contracts', JSON.stringify(next)); } catch (e) {}
     setCloudStatus('syncing');
@@ -2125,6 +2319,28 @@ export default function CleaningApp() {
     return <DriverSchedulePage slug={route.slug} savedDays={savedDays} bookings={bookings} date={date} companyInfo={companyInfo} cleanerHomes={cleanerHomes} officeAddress={officeAddress} />;
   }
 
+  // ====== PASSWORD GATE ======
+  // Show the password screen before anything else if the user hasn't authenticated.
+  // Note: companyInfo must load from cloud first — otherwise we don't yet know if a
+  // password has been set. Show a tiny loading state until cloudStatus != 'connecting'.
+  if (!isAuthed) {
+    if (cloudStatus === 'connecting' && !companyInfo?.appPasswordHash) {
+      return (
+        <div style={{ minHeight: '100vh', background: colors.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit' }}>
+          <div style={{ color: colors.ink + '99', fontSize: '14px' }}>Loading…</div>
+        </div>
+      );
+    }
+    return (
+      <PasswordGate
+        companyInfo={companyInfo}
+        saveCompanyInfo={saveCompanyInfo}
+        onAuthenticated={() => setIsAuthed(true)}
+        colors={colors}
+      />
+    );
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: colors.bg, fontFamily: '"Inter", -apple-system, sans-serif', color: colors.ink }}>
       <style>{`
@@ -2166,50 +2382,99 @@ export default function CleaningApp() {
               <p style={{ margin: '4px 0 0', fontSize: '13px', color: colors.ink + '99' }}>Daily operations · clients · earnings · expenses · {companyInfo.phone || 'Abu Dhabi'}</p>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            {isAdminMode && (
+              <span style={{
+                background: '#DBEAFE',
+                color: '#1E40AF',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 800,
+                letterSpacing: '0.4px',
+                border: '1.5px solid #93C5FD',
+              }}>
+                👤 ADMIN MODE · today+future only
+              </span>
+            )}
             {statusMsg && <span style={{ fontSize: '13px', color: colors.accent, fontWeight: 600 }}>{statusMsg}</span>}
             <CloudSyncBadge status={cloudStatus} lastSync={lastSync} colors={colors} />
-            <input type="date" className="input" value={date} onChange={e => loadDate(e.target.value)} style={{ width: 'auto' }} />
-            <button className="btn btn-primary" onClick={saveDay}><Save size={14} /> Save Day</button>
+            <input
+              type="date"
+              className="input"
+              value={date}
+              onChange={e => loadDate(e.target.value)}
+              min={isAdminMode ? todayStr : undefined}
+              style={{ width: 'auto' }}
+            />
+            {!isDayReadOnlyForAdmin && <button className="btn btn-primary" onClick={saveDay}><Save size={14} /> Save Day</button>}
+            <button
+              className="btn btn-sm"
+              onClick={() => { if (confirm('Sign out of this device?')) logout(); }}
+              title="Sign out"
+              style={{ padding: '6px 10px' }}
+            >
+              🔒 Logout
+            </button>
           </div>
         </div>
         <div style={{ display: 'flex', marginTop: '16px', borderBottom: `1px solid ${colors.border}`, marginLeft: -32, marginRight: -32, paddingLeft: 32, paddingRight: 32, overflowX: 'auto' }}>
           <button className={`tab ${view === 'input' ? 'active' : ''}`} onClick={() => setView('input')}><Plus size={15} /> Bookings ({bookingsWithCalc.length})</button>
           <button className={`tab ${view === 'plan' ? 'active' : ''}`} onClick={() => setView('plan')}>📅 Plan</button>
           <button className={`tab ${view === 'deployment' ? 'active' : ''}`} onClick={() => setView('deployment')}><Grid3x3 size={15} /> Deployment</button>
-          <button className={`tab ${view === 'report' ? 'active' : ''}`} onClick={() => setView('report')}><FileText size={15} /> Daily Report</button>
-          <button className={`tab ${view === 'clients' ? 'active' : ''}`} onClick={() => setView('clients')}><BookUser size={15} /> Clients ({clients.length})</button>
-          <button className={`tab ${view === 'cleaners' ? 'active' : ''}`} onClick={() => setView('cleaners')}><Users size={15} /> Cleaners</button>
-          <button className={`tab ${view === 'staff-links' ? 'active' : ''}`} onClick={() => setView('staff-links')}><Phone size={15} /> Staff Links</button>
-          <button className={`tab ${view === 'contracts' ? 'active' : ''}`} onClick={() => setView('contracts')}><Repeat size={15} /> Contracts ({contracts.filter(c=>c.active).length})</button>
-          <button className={`tab ${view === 'earnings' ? 'active' : ''}`} onClick={() => setView('earnings')}><TrendingUp size={15} /> Earnings</button>
           <button className={`tab ${view === 'pending' ? 'active' : ''}`} onClick={() => setView('pending')}><AlertCircle size={15} /> Pending</button>
-          <button className={`tab ${view === 'monthly' ? 'active' : ''}`} onClick={() => setView('monthly')}><CalendarDays size={15} /> Monthly Report</button>
-          <button className={`tab ${view === 'driver' ? 'active' : ''}`} onClick={() => setView('driver')}><Truck size={15} /> Driver</button>
-          <button className={`tab ${view === 'invoices' ? 'active' : ''}`} onClick={() => setView('invoices')}><Receipt size={15} /> Invoices</button>
-          <button className={`tab ${view === 'expenses' ? 'active' : ''}`} onClick={() => setView('expenses')}><Wallet size={15} /> Expenses</button>
-          <button className={`tab ${view === 'payroll' ? 'active' : ''}`} onClick={() => setView('payroll')}><Users size={15} /> Payroll</button>
-          <button className={`tab ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Settings size={15} /> Settings</button>
+          {!isAdminMode && <>
+            <button className={`tab ${view === 'report' ? 'active' : ''}`} onClick={() => setView('report')}><FileText size={15} /> Daily Report</button>
+            <button className={`tab ${view === 'clients' ? 'active' : ''}`} onClick={() => setView('clients')}><BookUser size={15} /> Clients ({clients.length})</button>
+            <button className={`tab ${view === 'cleaners' ? 'active' : ''}`} onClick={() => setView('cleaners')}><Users size={15} /> Cleaners</button>
+            <button className={`tab ${view === 'staff-links' ? 'active' : ''}`} onClick={() => setView('staff-links')}><Phone size={15} /> Staff Links</button>
+            <button className={`tab ${view === 'contracts' ? 'active' : ''}`} onClick={() => setView('contracts')}><Repeat size={15} /> Contracts ({contracts.filter(c=>c.active).length})</button>
+            <button className={`tab ${view === 'earnings' ? 'active' : ''}`} onClick={() => setView('earnings')}><TrendingUp size={15} /> Earnings</button>
+            <button className={`tab ${view === 'monthly' ? 'active' : ''}`} onClick={() => setView('monthly')}><CalendarDays size={15} /> Monthly Report</button>
+            <button className={`tab ${view === 'driver' ? 'active' : ''}`} onClick={() => setView('driver')}><Truck size={15} /> Driver</button>
+            <button className={`tab ${view === 'invoices' ? 'active' : ''}`} onClick={() => setView('invoices')}><Receipt size={15} /> Invoices</button>
+            <button className={`tab ${view === 'expenses' ? 'active' : ''}`} onClick={() => setView('expenses')}><Wallet size={15} /> Expenses</button>
+            <button className={`tab ${view === 'payroll' ? 'active' : ''}`} onClick={() => setView('payroll')}><Users size={15} /> Payroll</button>
+            <button className={`tab ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Settings size={15} /> Settings</button>
+          </>}
         </div>
       </div>
 
       <div style={{ padding: '32px', maxWidth: '1400px', margin: '0 auto' }}>
-        {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} smartSuggestionsOff={smartSuggestionsOff} />}
+        {isDayReadOnlyForAdmin && (
+          <div style={{
+            background: '#FEF3C7',
+            border: '2px solid #F59E0B',
+            borderRadius: '10px',
+            padding: '12px 16px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+          }}>
+            <span style={{ fontSize: '20px' }}>🔒</span>
+            <div>
+              <div style={{ fontWeight: 800, color: '#78350F', fontSize: '14px' }}>Read-only view</div>
+              <div style={{ fontSize: '12px', color: '#92400E' }}>Admin cannot modify past bookings. Switch to today to add new bookings.</div>
+            </div>
+          </div>
+        )}
+        {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} smartSuggestionsOff={smartSuggestionsOff} isAdminMode={isAdminMode} isDayReadOnlyForAdmin={isDayReadOnlyForAdmin} />}
         {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
-        {view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
-        {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
-        {view === 'cleaners' && <CleanersView cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} />}
-        {view === 'staff-links' && <StaffLinksView allCleaners={allCleaners} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
-        {view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} allCleaners={allCleaners} exportContractsExcel={exportContractsExcel} savedDays={savedDays} bookings={bookings} currentDate={date} />}
-        {view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
-        {view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
-        {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} />}
-        {view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} currentDate={date} currentBookings={bookings} savedDays={savedDays} />}
-        {view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} payroll={payroll} savePayroll={savePayroll} PAYROLL_ROSTER={PAYROLL_ROSTER} cleanerProfiles={cleanerProfiles} />}
-        {view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} allBookings={allBookingsWithDate} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} />}
-        {view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} cloudStatus={cloudStatus} lastSync={lastSync} bookings={bookings} savedDays={savedDays} clients={clients} contracts={contracts} cleanerHomes={cleanerHomes} officeAddress={officeAddress} expenses={expenses} setCloudStatus={setCloudStatus} setLastSync={setLastSync} smartSuggestionsOff={smartSuggestionsOff} toggleSmartSuggestionsOff={toggleSmartSuggestionsOff} />}
+        {!isAdminMode && view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
+        {!isAdminMode && view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
+        {!isAdminMode && view === 'cleaners' && <CleanersView cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} />}
+        {!isAdminMode && view === 'staff-links' && <StaffLinksView allCleaners={allCleaners} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
+        {!isAdminMode && view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} allCleaners={allCleaners} exportContractsExcel={exportContractsExcel} savedDays={savedDays} bookings={bookings} currentDate={date} />}
+        {!isAdminMode && view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
+        {!isAdminMode && view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
+        {!isAdminMode && view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} />}
+        {!isAdminMode && view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} currentDate={date} currentBookings={bookings} savedDays={savedDays} />}
+        {!isAdminMode && view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} payroll={payroll} savePayroll={savePayroll} PAYROLL_ROSTER={PAYROLL_ROSTER} cleanerProfiles={cleanerProfiles} />}
+        {!isAdminMode && view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} allBookings={allBookingsWithDate} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} />}
+        {!isAdminMode && view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} cloudStatus={cloudStatus} lastSync={lastSync} bookings={bookings} savedDays={savedDays} clients={clients} contracts={contracts} cleanerHomes={cleanerHomes} officeAddress={officeAddress} expenses={expenses} setCloudStatus={setCloudStatus} setLastSync={setLastSync} smartSuggestionsOff={smartSuggestionsOff} toggleSmartSuggestionsOff={toggleSmartSuggestionsOff} />}
       </div>
 
       {clientPickerFor && <ClientPickerModal clients={clients} onPick={(c) => applyClientToBooking(clientPickerFor, c)} onClose={() => setClientPickerFor(null)} colors={colors} />}
@@ -2219,7 +2484,7 @@ export default function CleaningApp() {
   );
 }
 
-function InputView({ bookings, setBookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, allCleaners, clients, saveClients, setClientPickerFor, setBookingPinFor, contracts, generateFromContracts, exportEverythingExcel, companyInfo, scheduledBookings, saveScheduledBookings, smartSuggestions, smartBuilderDismissed, setSmartBuilderDismissed, smartSuggestionsOff }) {
+function InputView({ bookings, setBookings, bookingsWithCalc, updateBooking, addBooking, removeBooking, clearDay, date, formatDate, colors, totalRevenue, totalHours, cashTotal, onlineTotal, activeCleaners, allCleaners, clients, saveClients, setClientPickerFor, setBookingPinFor, contracts, generateFromContracts, exportEverythingExcel, companyInfo, scheduledBookings, saveScheduledBookings, smartSuggestions, smartBuilderDismissed, setSmartBuilderDismissed, smartSuggestionsOff, isAdminMode, isDayReadOnlyForAdmin }) {
   const dayOfWeek = new Date(date).getDay();
   const todayContracts = contracts.filter(c => c.active && c.daysOfWeek.includes(dayOfWeek));
   const [showFastBooking, setShowFastBooking] = useState(false);
@@ -2291,16 +2556,17 @@ Thank you for choosing us!
         <button className="btn btn-primary" onClick={() => setShowFastBooking(true)} style={{ background: colors.gold, color: colors.ink, borderColor: colors.gold, fontWeight: 700 }} title="Search a client by mobile or name, then create a booking in seconds">
           ⚡ Fast Booking
         </button>
-        <button className="btn btn-primary" onClick={exportEverythingExcel} title="Download a complete Excel file with all your data: today's report, all history, clients, contracts, earnings, and pending payments">
+        {!isAdminMode && <button className="btn btn-primary" onClick={exportEverythingExcel} title="Download a complete Excel file with all your data: today's report, all history, clients, contracts, earnings, and pending payments">
           <FileSpreadsheet size={14} /> Export Everything to Excel
-        </button>
+        </button>}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginBottom: '20px' }}>
-        <StatCard icon={<DollarSign size={18} />} label="Revenue" value={`${totalRevenue.toFixed(0)} AED`} color={colors.accent} colors={colors} />
+        {!isAdminMode && <StatCard icon={<DollarSign size={18} />} label="Revenue" value={`${totalRevenue.toFixed(0)} AED`} color={colors.accent} colors={colors} />}
         <StatCard icon={<Clock size={18} />} label="Hours" value={`${totalHours.toFixed(1)}`} color={colors.gold} colors={colors} />
         <StatCard icon={<Users size={18} />} label="Cleaners" value={`${activeCleaners}/${allCleaners.length}`} color={colors.rust} colors={colors} />
-        <StatCard icon={<DollarSign size={18} />} label="Cash" value={`${cashTotal.toFixed(0)}`} color={colors.ink} colors={colors} />
-        <StatCard icon={<DollarSign size={18} />} label="Online" value={`${onlineTotal.toFixed(0)}`} color={colors.ink} colors={colors} />
+        {!isAdminMode && <StatCard icon={<DollarSign size={18} />} label="Cash" value={`${cashTotal.toFixed(0)}`} color={colors.ink} colors={colors} />}
+        {!isAdminMode && <StatCard icon={<DollarSign size={18} />} label="Online" value={`${onlineTotal.toFixed(0)}`} color={colors.ink} colors={colors} />}
+        <StatCard icon={<AlertCircle size={18} />} label="Bookings" value={`${bookingsWithCalc.length}`} color={colors.accent} colors={colors} />
       </div>
 
       {/* ===== DOUBLE-BOOKING WARNING ===== */}
@@ -2385,8 +2651,10 @@ Thank you for choosing us!
         <div style={{ padding: '16px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
           <h3 className="display-font" style={{ margin: 0, fontSize: '20px', fontWeight: 700 }}>Bookings · {formatDate(date)}</h3>
           <div style={{ display: 'flex', gap: '8px' }}>
-            <button className="btn btn-danger btn-sm" onClick={clearDay}><RotateCcw size={14} /> Clear</button>
-            <button className="btn btn-primary btn-sm" onClick={addBooking}><Plus size={14} /> Add Booking</button>
+            {!isDayReadOnlyForAdmin && <>
+              {!isAdminMode && <button className="btn btn-danger btn-sm" onClick={clearDay}><RotateCcw size={14} /> Clear</button>}
+              <button className="btn btn-primary btn-sm" onClick={addBooking}><Plus size={14} /> Add Booking</button>
+            </>}
           </div>
         </div>
         <div style={{ overflowX: 'auto' }}>
@@ -2502,7 +2770,7 @@ Thank you for choosing us!
                         >
                           <MessageCircle size={14} />
                         </button>
-                        <button className="btn btn-danger btn-sm" onClick={() => removeBooking(b.id)} style={{ padding: '6px 8px' }}><Trash2 size={14} /></button>
+                        {!isDayReadOnlyForAdmin && !isAdminMode && <button className="btn btn-danger btn-sm" onClick={() => removeBooking(b.id)} style={{ padding: '6px 8px' }}><Trash2 size={14} /></button>}
                       </div>
                     </Td>
                   </tr>
@@ -6368,6 +6636,81 @@ function InvoiceContent({ invoiceNumber, issueDate, client, companyInfo, lineIte
   );
 }
 
+// ===== CHANGE PASSWORD BOX (used inside SettingsView) =====
+function ChangePasswordBox({ companyInfo, saveCompanyInfo, colors }) {
+  const [current, setCurrent] = React.useState('');
+  const [next, setNext] = React.useState('');
+  const [next2, setNext2] = React.useState('');
+  const [msg, setMsg] = React.useState(null); // { type: 'error' | 'success', text }
+  const [busy, setBusy] = React.useState(false);
+
+  const change = async (e) => {
+    e?.preventDefault();
+    setMsg(null);
+    if (next.length < 4) { setMsg({ type: 'error', text: 'New password must be at least 4 characters' }); return; }
+    if (next !== next2) { setMsg({ type: 'error', text: 'New passwords don’t match' }); return; }
+    setBusy(true);
+    const curHash = await sha256Hex(current);
+    if (curHash !== companyInfo.appPasswordHash) {
+      setMsg({ type: 'error', text: 'Current password is wrong' });
+      setBusy(false);
+      return;
+    }
+    try {
+      const newHash = await sha256Hex(next);
+      await saveCompanyInfo({ ...companyInfo, appPasswordHash: newHash });
+      setMsg({ type: 'success', text: '✓ Password updated. Other devices will need the new password on next login.' });
+      setCurrent(''); setNext(''); setNext2('');
+    } catch (err) {
+      setMsg({ type: 'error', text: 'Could not save new password' });
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px', marginBottom: '16px' }}>
+      <h3 className="display-font" style={{ margin: '0 0 4px', fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+        🔐 Change app password
+      </h3>
+      <p style={{ margin: '0 0 14px', fontSize: '12px', color: colors.ink + '99' }}>
+        Changes sync to every device. After changing, you'll need to log in again on each device.
+      </p>
+      <form onSubmit={change} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
+        <div>
+          <label style={{ fontSize: '12px', fontWeight: 700, display: 'block', marginBottom: '4px' }}>Current password</label>
+          <input type="password" className="input" value={current} onChange={e => setCurrent(e.target.value)} style={{ width: '100%' }} />
+        </div>
+        <div>
+          <label style={{ fontSize: '12px', fontWeight: 700, display: 'block', marginBottom: '4px' }}>New password</label>
+          <input type="password" className="input" value={next} onChange={e => setNext(e.target.value)} placeholder="At least 4 characters" style={{ width: '100%' }} />
+        </div>
+        <div>
+          <label style={{ fontSize: '12px', fontWeight: 700, display: 'block', marginBottom: '4px' }}>Confirm new password</label>
+          <input type="password" className="input" value={next2} onChange={e => setNext2(e.target.value)} style={{ width: '100%' }} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+          <button type="submit" className="btn btn-primary" disabled={busy} style={{ width: '100%' }}>
+            {busy ? 'Saving…' : 'Update password'}
+          </button>
+        </div>
+      </form>
+      {msg && (
+        <div style={{
+          marginTop: '12px',
+          padding: '10px 14px',
+          background: msg.type === 'error' ? '#FEE2E2' : (colors.accentLight || '#F0F8F4'),
+          color: msg.type === 'error' ? '#991B1B' : colors.accent,
+          borderRadius: '8px',
+          fontSize: '13px',
+          fontWeight: 600,
+        }}>
+          {msg.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SettingsView({ companyInfo, saveCompanyInfo, colors, cloudStatus, lastSync, bookings, savedDays, clients, contracts, cleanerHomes, officeAddress, expenses, setCloudStatus, setLastSync, smartSuggestionsOff, toggleSmartSuggestionsOff }) {
   const [info, setInfo] = React.useState(companyInfo);
   const [savedMsg, setSavedMsg] = React.useState('');
@@ -6542,6 +6885,9 @@ function SettingsView({ companyInfo, saveCompanyInfo, colors, cloudStatus, lastS
           💡 First-time setup: Click "Push all local data to cloud" to upload your existing bookings, clients, contracts, expenses, and settings. After that, every change syncs automatically.
         </p>
       </div>
+
+      {/* ===== CHANGE PASSWORD ===== */}
+      <ChangePasswordBox companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />
 
       {/* ===== SMART SUGGESTIONS TOGGLE (cloud-synced via companyInfo) ===== */}
       <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, padding: '20px', marginBottom: '16px' }}>
