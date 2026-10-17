@@ -136,9 +136,11 @@ const clientColor = (clientName) => {
     hash = hash & 0xffffffff;
   }
   const hue = Math.abs(hash) % 360;
+  // Very light pastels (lightness 94%) → strong contrast with bold black text.
+  // Border is a saturated version of the same hue to make the client identity obvious.
   return {
-    bg: `hsl(${hue}, 65%, 90%)`,
-    border: `hsl(${hue}, 55%, 65%)`,
+    bg: `hsl(${hue}, 70%, 94%)`,
+    border: `hsl(${hue}, 60%, 55%)`,
     accent: `hsl(${hue}, 60%, 32%)`,
   };
 };
@@ -5178,7 +5180,8 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
                       {jobs.map((job, idx) => {
                         const globalIdx = (byCleaner[cleaner] || []).indexOf(job);
                         const flagged = isConflicted(job, globalIdx >= 0 ? globalIdx : idx, cleaner);
-                        // Per-client pastel background so same client across cleaners = same color
+                        // Per-client pastel background so same client across cleaners = same color.
+                        // ALL text stays BLACK + BOLD for maximum readability on colored backgrounds.
                         const cc = clientColor(job.clientName);
                         return (
                           <div key={idx} style={{
@@ -5187,17 +5190,18 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
                             background: flagged ? 'rgba(220, 38, 38, 0.12)' : cc.bg,
                             borderRadius: '6px',
                             borderLeft: `3px solid ${flagged ? '#DC2626' : cc.border}`,
+                            color: '#000000',
                           }}>
                             {flagged && (
                               <div style={{ fontSize: '10px', fontWeight: 800, color: '#991B1B', marginBottom: '2px', letterSpacing: '0.3px' }}>
                                 🚨 CONFLICT
                               </div>
                             )}
-                            <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '3px', color: flagged ? '#991B1B' : cc.accent }}>{job.clientName}</div>
-                            <div style={{ fontSize: '11px', lineHeight: '1.4' }}>{job.location}</div>
-                            {job.withMaterials && <div style={{ fontSize: '10px', color: colors.accent, fontWeight: 800, marginTop: '3px', background: colors.cellMaterials, padding: '1px 6px', borderRadius: '3px', display: 'inline-block' }}>w/ materials</div>}
-                            <div className="mono" style={{ fontSize: '12px', fontWeight: 600, marginTop: '4px' }}>{job.timing}</div>
-                            <div className="mono" style={{ fontSize: '12px', fontWeight: 700, color: colors.priceRed, marginTop: '3px' }}>({job.total.toFixed(0)} AED/{job.paymentType === 'CASH' ? 'C' : 'O'})</div>
+                            <div style={{ fontWeight: 800, fontSize: '13px', marginBottom: '3px', color: '#000000' }}>{job.clientName}</div>
+                            <div style={{ fontSize: '11px', lineHeight: '1.4', fontWeight: 700, color: '#000000' }}>{job.location}</div>
+                            {job.withMaterials && <div style={{ fontSize: '10px', color: '#000000', fontWeight: 800, marginTop: '3px', background: 'white', padding: '1px 6px', borderRadius: '3px', display: 'inline-block', border: '1px solid #000' }}>w/ materials</div>}
+                            <div className="mono" style={{ fontSize: '12px', fontWeight: 800, marginTop: '4px', color: '#000000' }}>{job.timing}</div>
+                            <div className="mono" style={{ fontSize: '12px', fontWeight: 800, color: '#000000', marginTop: '3px' }}>({job.total.toFixed(0)} AED/{job.paymentType === 'CASH' ? 'C' : 'O'})</div>
                           </div>
                         );
                       })}
