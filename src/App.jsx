@@ -1404,13 +1404,20 @@ export default function CleaningApp() {
     return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][idx] || '';
   }
 
-  // Auto-run on date change: add contracts + scheduled bookings for the date
-  // (silently, without duplicates). Uses autoRunDates Set so each date runs only once per session.
+  // Auto-run on date change: add contracts for TODAY only (safety gate).
+  // Future dates do NOT auto-fill — they must be reviewed via the Plan tab, then
+  // confirmed manually via "+ Book". This prevents accidental duplicates/conflicts
+  // from propagating into future dates without the user seeing them first.
+  // Uses autoRunDates Set so each date runs only once per session.
   useEffect(() => {
     if (!date) return;
     if (autoRunDates.has(date)) return;
     autoRunDates.add(date);
     setSmartBuilderDismissed(false);
+
+    // SAFETY GATE: only auto-fill TODAY. Future dates stay empty until manually filled.
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (date !== todayStr) return;
 
     // Build unique dedupe key set based on (client + date + timing + cleaner)
     const existingKeys = new Set(
@@ -2457,7 +2464,7 @@ export default function CleaningApp() {
           </div>
         )}
         {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} smartSuggestionsOff={smartSuggestionsOff} isAdminMode={isAdminMode} isDayReadOnlyForAdmin={isDayReadOnlyForAdmin} />}
-        {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} />}
+        {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} contracts={contracts} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} />}
@@ -4382,7 +4389,7 @@ function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
 //   - 7-day forecast
 // Also includes a WhatsApp "Contact Client" quick-action.
 // =====================================================================
-function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, setBookings, date, colors, clients, companyInfo, allCleaners, setView, setDate, showStatus, scheduledBookings = [], saveScheduledBookings }) {
+function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, setBookings, date, colors, clients, companyInfo, allCleaners, setView, setDate, showStatus, scheduledBookings = [], saveScheduledBookings, contracts = [] }) {
   const [targetDate, setTargetDate] = React.useState(date);
   const [search, setSearch] = React.useState('');
   React.useEffect(() => { setTargetDate(date); }, [date]);
@@ -4427,6 +4434,84 @@ function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, 
   const scheduledForDay = React.useMemo(() => {
     return (scheduledBookings || []).filter(s => s.date === targetDate && s.status === 'pending');
   }, [scheduledBookings, targetDate]);
+
+  // CONTRACTS due on the target date — only shown for FUTURE dates (today's are already
+  // auto-filled). Each row represents a contract × cleaner combination. User can add
+  // or dismiss each one individually to avoid accidental duplicates.
+  const contractsForDay = React.useMemo(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (targetDate <= todayStr) return []; // today & past: auto-filled or historical
+    const matching = (contracts || []).filter(c => contractRunsOnDate(c, targetDate));
+    const rows = [];
+    const existingBookings = savedDays[targetDate]?.bookings || [];
+    const normalize = (s) => (s || '').trim().toLowerCase();
+    matching.forEach(c => {
+      const cleaners = Array.isArray(c.cleaners) && c.cleaners.length > 0 ? c.cleaners : [c.cleaner].filter(Boolean);
+      cleaners.forEach(cleanerName => {
+        // Skip if already added to the saved day for this (client + time + cleaner)
+        const alreadyAdded = existingBookings.some(b =>
+          normalize(b.clientName) === normalize(c.clientName) &&
+          normalize(b.cleaner) === normalize(cleanerName) &&
+          b.timing === c.timing
+        );
+        if (alreadyAdded) return;
+        rows.push({
+          id: `${c.id}__${cleanerName}`,
+          contract: c,
+          cleaner: cleanerName,
+          clientName: c.clientName,
+          clientId: c.clientId,
+          timing: c.timing,
+          pricePerHour: c.pricePerHour,
+          withMaterials: c.withMaterials,
+          paymentType: c.paymentType,
+        });
+      });
+    });
+    return rows;
+  }, [contracts, targetDate, savedDays]);
+
+  const confirmContract = (row) => {
+    const client = (clients || []).find(cl => cl.id === row.clientId);
+    const newBooking = {
+      id: 'b_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      clientId: row.clientId, clientName: row.clientName,
+      phone: client?.phone || '', location: client?.address || '',
+      lat: client?.lat, lng: client?.lng,
+      cleaner: row.cleaner, timing: row.timing,
+      pricePerHour: row.pricePerHour, withMaterials: row.withMaterials,
+      paymentType: row.paymentType, pickupType: 'OFFICE',
+      paymentStatus: 'PENDING', source: 'contract',
+    };
+    const existing = savedDays[targetDate]?.bookings || [];
+    const updated = { ...savedDays, [targetDate]: { bookings: [...existing, newBooking], savedAt: new Date().toISOString() } };
+    setSavedDays(updated);
+    try { localStorage.setItem('sparkle_all_days', JSON.stringify(updated)); } catch (e) {}
+    showStatus && showStatus(`✓ Added ${row.clientName} (${row.cleaner}) to ${targetDate}`);
+  };
+
+  const addAllContracts = () => {
+    if (contractsForDay.length === 0) return;
+    if (!confirm(`Add all ${contractsForDay.length} contract bookings to ${targetDate}?`)) return;
+    const existing = savedDays[targetDate]?.bookings || [];
+    const toAdd = contractsForDay.map(row => {
+      const client = (clients || []).find(cl => cl.id === row.clientId);
+      return {
+        id: 'b_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9) + '_' + row.id,
+        clientId: row.clientId, clientName: row.clientName,
+        phone: client?.phone || '', location: client?.address || '',
+        lat: client?.lat, lng: client?.lng,
+        cleaner: row.cleaner, timing: row.timing,
+        pricePerHour: row.pricePerHour, withMaterials: row.withMaterials,
+        paymentType: row.paymentType, pickupType: 'OFFICE',
+        paymentStatus: 'PENDING', source: 'contract',
+      };
+    });
+    const updated = { ...savedDays, [targetDate]: { bookings: [...existing, ...toAdd], savedAt: new Date().toISOString() } };
+    setSavedDays(updated);
+    try { localStorage.setItem('sparkle_all_days', JSON.stringify(updated)); } catch (e) {}
+    showStatus && showStatus(`✓ Added ${toAdd.length} contract booking${toAdd.length > 1 ? 's' : ''}`);
+  };
 
   // 7-day forecast
   const forecast7 = React.useMemo(() => {
@@ -4655,7 +4740,7 @@ function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, 
         <div style={{ fontSize: '12px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>Target date</div>
         <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, marginBottom: '14px' }}>{formatDateLabel(targetDate)}</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '14px' }}>
-          <StatMiniLight label="Total expected" value={toContactDue.length + toContactLikely.length + overdue.length + confirmed.length} />
+          <StatMiniLight label="Total expected" value={toContactDue.length + toContactLikely.length + overdue.length + confirmed.length + contractsForDay.length + scheduledForDay.length} />
           <StatMiniLight label="✅ Confirmed" value={confirmed.length} />
           <StatMiniLight label="📞 To contact" value={toContactDue.length + toContactLikely.length} highlight />
           <StatMiniLight label="🔴 Overdue" value={overdue.length} />
@@ -4669,6 +4754,53 @@ function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, 
           <div style={{ fontWeight: 700, color: '#78350F', marginBottom: '4px' }}>⚠️ No recurring client patterns loaded</div>
           <div style={{ fontSize: '12px', color: '#7F1D1D' }}>
             Run <strong>recurring_clients_setup.sql</strong> in your Supabase SQL Editor to seed the 53 known client patterns. Then reload this page.
+          </div>
+        </div>
+      )}
+
+      {/* ===== 📋 CONTRACTS DUE THIS DAY (future dates only — require manual review) ===== */}
+      {contractsForDay.length > 0 && (
+        <div style={{ background: 'white', borderRadius: '12px', border: `2px solid ${colors.accent}`, padding: '18px', marginBottom: '14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap', gap: '8px' }}>
+            <h3 className="display-font" style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: colors.accent }}>
+              📋 Contracts due this day ({contractsForDay.length}) — review before adding
+            </h3>
+            <button className="btn btn-primary btn-sm" onClick={addAllContracts}>+ Add all</button>
+          </div>
+          <p style={{ fontSize: '12px', color: colors.ink + '99', margin: '0 0 12px' }}>
+            These recurring contracts match this future date. Not auto-added — click <strong>+ Add</strong> on each one you want to confirm, or <strong>+ Add all</strong> if all look correct.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {contractsForDay.map(row => (
+              <div key={row.id} style={{
+                background: 'white',
+                border: `1.5px solid ${colors.border}`,
+                borderRadius: '10px',
+                padding: '12px 14px',
+                display: 'grid',
+                gridTemplateColumns: 'minmax(170px, 1.4fr) minmax(100px, 0.8fr) minmax(120px, 1fr) auto',
+                gap: '10px',
+                alignItems: 'center',
+              }}>
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: 700 }}>{row.clientName}</div>
+                  <div style={{ fontSize: '11px', color: colors.ink + '99', marginTop: '2px' }}>
+                    {row.pricePerHour} AED/hr · {row.withMaterials ? 'w/ materials' : 'no materials'} · {row.paymentType}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '11px', color: colors.ink + '77', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Time</div>
+                  <div className="mono" style={{ fontSize: '13px', fontWeight: 600 }}>{row.timing}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '11px', color: colors.ink + '77', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Cleaner</div>
+                  <div style={{ fontSize: '13px', fontWeight: 600 }}>{row.cleaner}</div>
+                </div>
+                <button className="btn btn-sm" style={{ background: colors.accent, color: 'white', borderColor: colors.accent, fontSize: '11px', padding: '4px 10px' }} onClick={() => confirmContract(row)}>
+                  + Add
+                </button>
+              </div>
+            ))}
           </div>
         </div>
       )}
