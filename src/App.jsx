@@ -1511,6 +1511,13 @@ export default function CleaningApp() {
     });
   }, [cleanerProfiles]);
 
+  // allStaff = EVERY staff member (including those marked Unavailable).
+  // Payroll uses this because staff on leave still get paid; the dropdowns don't.
+  const allStaff = React.useMemo(() => {
+    const custom = Object.keys(cleanerProfiles || {}).filter(n => !CLEANERS.includes(n));
+    return [...CLEANERS, ...custom];
+  }, [cleanerProfiles]);
+
   // byCleaner groups today's bookings per cleaner for Deployment, Driver, etc.
   // We initialize keys for every cleaner in allCleaners (so added cleaners like Gabby
   // appear in the Deployment grid). As a safety net, we also auto-create a bucket for
@@ -2495,12 +2502,12 @@ export default function CleaningApp() {
         {!isAdminMode && view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
         {!isAdminMode && view === 'cleaners' && <CleanersView cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} />}
         {!isAdminMode && view === 'staff-links' && <StaffLinksView allCleaners={allCleaners} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
-        {!isAdminMode && view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={CLEANERS} allCleaners={allCleaners} exportContractsExcel={exportContractsExcel} savedDays={savedDays} bookings={bookings} currentDate={date} />}
+        {!isAdminMode && view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={allCleaners} allCleaners={allCleaners} exportContractsExcel={exportContractsExcel} savedDays={savedDays} bookings={bookings} currentDate={date} />}
         {!isAdminMode && view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
         {!isAdminMode && view === 'monthly' && <MonthlyView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportMonthlyExcel={exportMonthlyExcel} />}
         {!isAdminMode && view === 'invoices' && <InvoicesView allBookings={allBookingsWithDate} clients={clients} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} currentDate={date} currentBookings={bookings} savedDays={savedDays} />}
         {!isAdminMode && view === 'expenses' && <ExpensesView expenses={expenses} saveExpenses={saveExpenses} colors={colors} totalRevenue={totalRevenue} bookingsWithCalc={bookingsWithCalc} allBookings={allBookingsWithDate} payroll={payroll} savePayroll={savePayroll} PAYROLL_ROSTER={PAYROLL_ROSTER} cleanerProfiles={cleanerProfiles} />}
-        {!isAdminMode && view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} allBookings={allBookingsWithDate} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} />}
+        {!isAdminMode && view === 'payroll' && <PayrollView payroll={payroll} savePayroll={savePayroll} CLEANERS={allStaff} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} allBookings={allBookingsWithDate} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} />}
         {!isAdminMode && view === 'settings' && <SettingsView companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} cloudStatus={cloudStatus} lastSync={lastSync} bookings={bookings} savedDays={savedDays} clients={clients} contracts={contracts} cleanerHomes={cleanerHomes} officeAddress={officeAddress} expenses={expenses} setCloudStatus={setCloudStatus} setLastSync={setLastSync} smartSuggestionsOff={smartSuggestionsOff} toggleSmartSuggestionsOff={toggleSmartSuggestionsOff} />}
       </div>
 
