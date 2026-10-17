@@ -2491,7 +2491,14 @@ function InputView({ bookings, setBookings, bookingsWithCalc, updateBooking, add
 
   // ===== DOUBLE-BOOKING DETECTION (live, as the user types) =====
   // Group all bookings by cleaner and find any pair with overlapping intervals.
+  // ONLY applies to TODAY + FUTURE dates — past days render clean (historical
+  // overlaps are not errors, just history).
   const bookingConflicts = React.useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    // Skip conflict detection entirely for past dates
+    if (date < today) {
+      return { conflictedIds: new Set(), pairsByCleaner: {}, total: 0 };
+    }
     const byClnr = {};
     bookings.forEach(b => {
       if (!b.cleaner || !b.timing) return;
@@ -2516,7 +2523,7 @@ function InputView({ bookings, setBookings, bookingsWithCalc, updateBooking, add
     });
     const total = Object.values(pairsByCleaner).reduce((s, a) => s + a.length, 0);
     return { conflictedIds, pairsByCleaner, total };
-  }, [bookings]);
+  }, [bookings, date]);
 
   // Build a WhatsApp confirmation message and open the WhatsApp chat with it pre-filled.
   // Handles UAE phone numbers: if the number doesn't start with +/00/971, prepend 971.
@@ -4780,9 +4787,13 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
   // For each cleaner, find jobs whose intervals overlap another job of the SAME cleaner.
   // Builds a Set of booking identifiers that are in conflict, and a per-cleaner list of
   // conflict pairs for the warning banner.
+  // ONLY applies to TODAY + FUTURE dates — past days render clean (historical overlaps
+  // are not operational errors, just records of what happened).
+  const todayStr = new Date().toISOString().split('T')[0];
+  const detectConflicts = date >= todayStr;
   const conflictedJobIds = new Set();
   const conflictsByCleaner = {};
-  displayCleaners.forEach(cleaner => {
+  if (detectConflicts) displayCleaners.forEach(cleaner => {
     const jobs = byCleaner[cleaner] || [];
     const parsed = jobs.map(j => ({ job: j, interval: parseTimingToMinutes(j.timing) }));
     for (let i = 0; i < parsed.length; i++) {
