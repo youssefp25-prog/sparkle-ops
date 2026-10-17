@@ -122,6 +122,27 @@ const formatMinutes = (m) => {
   return `${h}:${String(mm).padStart(2, '0')}`;
 };
 
+// ===== CLIENT COLOR HELPER =====
+// Maps each unique client name to a stable pastel background color so the Deployment
+// grid is instantly scannable: same client = same color across cleaners, different
+// clients = different colors in the same cleaner's column.
+// Uses djb2 hash → HSL hue for determinism without a color palette size limit.
+const clientColor = (clientName) => {
+  if (!clientName || !clientName.trim()) return { bg: 'white', border: 'transparent' };
+  const key = clientName.trim().toLowerCase();
+  let hash = 5381;
+  for (let i = 0; i < key.length; i++) {
+    hash = ((hash << 5) + hash) + key.charCodeAt(i);
+    hash = hash & 0xffffffff;
+  }
+  const hue = Math.abs(hash) % 360;
+  return {
+    bg: `hsl(${hue}, 65%, 90%)`,
+    border: `hsl(${hue}, 55%, 65%)`,
+    accent: `hsl(${hue}, 60%, 32%)`,
+  };
+};
+
 // Check if two time intervals overlap. CRITICAL: back-to-back (8-10 and 10-12) is NOT a conflict.
 // Logic: a conflict exists iff aStart < bEnd AND aEnd > bStart.
 const intervalsOverlap = (a, b) => {
@@ -5140,8 +5161,6 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
                   if (jobs.length === 0) {
                     return <td key={cleaner} className="deployment-cell" style={{ background: '#fafafa' }}></td>;
                   }
-                  // Multiple jobs in the same slot stack vertically with a thin divider
-                  const anyMaterials = jobs.some(j => j.withMaterials);
                   // Any job in this cell conflicted? Mark the whole cell with red outline
                   const cellHasConflict = jobs.some((j, idx) => {
                     const globalIdx = (byCleaner[cleaner] || []).indexOf(j);
@@ -5149,30 +5168,34 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
                   });
                   return (
                     <td key={cleaner} className="deployment-cell" style={{
-                      background: cellHasConflict ? '#FEE2E2' : (anyMaterials ? colors.cellMaterials : 'white'),
-                      padding: '6px 6px',
+                      background: cellHasConflict ? '#FEE2E2' : 'white',
+                      padding: '4px 4px',
                       outline: cellHasConflict ? '3px solid #DC2626' : 'none',
                       outlineOffset: '-3px',
                       position: 'relative',
+                      verticalAlign: 'top',
                     }}>
                       {jobs.map((job, idx) => {
                         const globalIdx = (byCleaner[cleaner] || []).indexOf(job);
                         const flagged = isConflicted(job, globalIdx >= 0 ? globalIdx : idx, cleaner);
+                        // Per-client pastel background so same client across cleaners = same color
+                        const cc = clientColor(job.clientName);
                         return (
                           <div key={idx} style={{
-                            padding: idx === 0 ? '0 0 6px 0' : '6px 0',
-                            borderTop: idx > 0 ? `1px dashed ${colors.ink}44` : 'none',
-                            background: flagged ? 'rgba(220, 38, 38, 0.08)' : 'transparent',
-                            borderRadius: flagged ? '4px' : 0,
+                            padding: '6px 8px',
+                            marginBottom: idx < jobs.length - 1 ? '4px' : 0,
+                            background: flagged ? 'rgba(220, 38, 38, 0.12)' : cc.bg,
+                            borderRadius: '6px',
+                            borderLeft: `3px solid ${flagged ? '#DC2626' : cc.border}`,
                           }}>
                             {flagged && (
                               <div style={{ fontSize: '10px', fontWeight: 800, color: '#991B1B', marginBottom: '2px', letterSpacing: '0.3px' }}>
                                 🚨 CONFLICT
                               </div>
                             )}
-                            <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '3px', color: flagged ? '#991B1B' : 'inherit' }}>{job.clientName}</div>
+                            <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '3px', color: flagged ? '#991B1B' : cc.accent }}>{job.clientName}</div>
                             <div style={{ fontSize: '11px', lineHeight: '1.4' }}>{job.location}</div>
-                            {job.withMaterials && <div style={{ fontSize: '10px', color: colors.accent, fontWeight: 700, marginTop: '3px' }}>w/ materials</div>}
+                            {job.withMaterials && <div style={{ fontSize: '10px', color: colors.accent, fontWeight: 800, marginTop: '3px', background: colors.cellMaterials, padding: '1px 6px', borderRadius: '3px', display: 'inline-block' }}>w/ materials</div>}
                             <div className="mono" style={{ fontSize: '12px', fontWeight: 600, marginTop: '4px' }}>{job.timing}</div>
                             <div className="mono" style={{ fontSize: '12px', fontWeight: 700, color: colors.priceRed, marginTop: '3px' }}>({job.total.toFixed(0)} AED/{job.paymentType === 'CASH' ? 'C' : 'O'})</div>
                           </div>
@@ -5194,7 +5217,8 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
           </div>
         )}
         <div style={{ marginTop: '16px', fontSize: '11px', color: colors.ink + '99', display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-          <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: colors.cellMaterials, marginRight: '4px', verticalAlign: 'middle', border: '1px solid #ccc' }}></span> With materials</span>
+          <span>🎨 Each client has a unique color — same client across cleaners = same color (team jobs easy to spot)</span>
+          <span><span style={{ display: 'inline-block', padding: '1px 6px', background: colors.cellMaterials, color: colors.accent, fontSize: '10px', fontWeight: 800, borderRadius: '3px' }}>w/ materials</span> badge marks jobs with materials</span>
           <span>O = Online · C = Cash</span>
           <span><strong>1</strong> 7am–11am · <strong>2</strong> 11am–2pm · <strong>3</strong> 2pm–5pm · <strong>4</strong> 5pm–12am</span>
         </div>
