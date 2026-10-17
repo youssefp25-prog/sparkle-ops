@@ -553,7 +553,7 @@ const detectIsAdminMode = () => {
     return false;
   } catch (e) { return false; }
 };
-const ADMIN_ALLOWED_VIEWS = ['input', 'plan', 'deployment', 'pending', 'driver'];
+const ADMIN_ALLOWED_VIEWS = ['input', 'plan', 'deployment', 'driver'];
 
 export default function CleaningApp() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -2457,8 +2457,8 @@ export default function CleaningApp() {
           <button className={`tab ${view === 'plan' ? 'active' : ''}`} onClick={() => setView('plan')}>📅 Plan</button>
           <button className={`tab ${view === 'deployment' ? 'active' : ''}`} onClick={() => setView('deployment')}><Grid3x3 size={15} /> Deployment</button>
           <button className={`tab ${view === 'driver' ? 'active' : ''}`} onClick={() => setView('driver')}><Truck size={15} /> Driver</button>
-          <button className={`tab ${view === 'pending' ? 'active' : ''}`} onClick={() => setView('pending')}><AlertCircle size={15} /> Pending</button>
           {!isAdminMode && <>
+            <button className={`tab ${view === 'pending' ? 'active' : ''}`} onClick={() => setView('pending')}><AlertCircle size={15} /> Pending</button>
             <button className={`tab ${view === 'report' ? 'active' : ''}`} onClick={() => setView('report')}><FileText size={15} /> Daily Report</button>
             <button className={`tab ${view === 'clients' ? 'active' : ''}`} onClick={() => setView('clients')}><BookUser size={15} /> Clients ({clients.length})</button>
             <button className={`tab ${view === 'cleaners' ? 'active' : ''}`} onClick={() => setView('cleaners')}><Users size={15} /> Cleaners</button>
@@ -2496,7 +2496,7 @@ export default function CleaningApp() {
         {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} smartSuggestionsOff={smartSuggestionsOff} isAdminMode={isAdminMode} isDayReadOnlyForAdmin={isDayReadOnlyForAdmin} />}
         {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} contracts={contracts} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
-        {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
+        {!isAdminMode && view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} />}
         {!isAdminMode && view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
         {!isAdminMode && view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
@@ -2766,8 +2766,11 @@ Thank you for choosing us!
                               if (parsed.lat && parsed.lng) {
                                 updateBooking(b.id, 'lat', parsed.lat);
                                 updateBooking(b.id, 'lng', parsed.lng);
+                                alert(`✓ Pinned at ${parsed.lat.toFixed(5)}, ${parsed.lng.toFixed(5)}`);
                               } else if (parsed.isShortLink) {
-                                alert('Short Google Maps link saved — but exact GPS coords couldn\'t be extracted.\n\nTIP: For precise pinning, open the link in Google Maps → long-press the pin → copy the coordinates → paste again.');
+                                alert('⚠️ Short Google Maps link saved — but exact GPS coords couldn\'t be extracted.\n\nTIP: For precise pinning, open the link in Google Maps → long-press the pin → copy the coordinates → paste again.');
+                              } else {
+                                alert('No GPS coordinates found in clipboard.\n\nMake sure you copied a Google Maps URL that contains the coordinates.');
                               }
                             } catch (err) {
                               alert('Could not read clipboard. Browser may be blocking it — try copying the text and pasting manually in the location field.');
@@ -3012,7 +3015,7 @@ function FastBookingModal({ clients, saveClients, allCleaners, addBooking, booki
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Phone number</div>
               <input type="tel" value={newClient.phone} onChange={e => setNewClient({ ...newClient, phone: e.target.value })} placeholder="e.g. 050 123 4567" style={{ width: '100%', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px' }} />
             </label>
-            <label style={{ display: 'block', marginBottom: '18px' }}>
+            <label style={{ display: 'block', marginBottom: '10px' }}>
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>Address / Location</div>
               <input
                 type="text"
@@ -3031,6 +3034,28 @@ function FastBookingModal({ clients, saveClients, allCleaners, addBooking, booki
                 style={{ width: '100%', padding: '10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px' }}
               />
             </label>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const text = await navigator.clipboard.readText();
+                  if (!text) { alert('Clipboard is empty.\n\n1. Open Google Maps\n2. Share → Copy link\n3. Click this button again'); return; }
+                  const parsed = parseLocationInput(text);
+                  if (parsed.lat && parsed.lng) {
+                    setNewClient({ ...newClient, location: parsed.address || newClient.location, lat: parsed.lat, lng: parsed.lng });
+                    alert(`✓ Pinned at ${parsed.lat.toFixed(5)}, ${parsed.lng.toFixed(5)}`);
+                  } else if (parsed.isShortLink) {
+                    alert('⚠️ Short Google Maps link saved as address — GPS point not extracted.\n\nTO GET EXACT PIN:\n1. Open the link in Google Maps\n2. Long-press the pin → tap coordinates\n3. Come back and click again');
+                    setNewClient({ ...newClient, location: text });
+                  } else {
+                    alert('No GPS coordinates found in clipboard.');
+                  }
+                } catch (err) { alert('Could not read clipboard.'); }
+              }}
+              style={{ width: '100%', padding: '10px 14px', background: '#25D366', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: 'pointer', marginBottom: '18px' }}
+            >
+              📱 Paste Google Maps link from clipboard
+            </button>
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between' }}>
               <button onClick={() => setStep('search')} style={{ padding: '10px 18px', border: `1px solid ${colors.border}`, background: 'white', borderRadius: '8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>← Back</button>
               <button onClick={saveNewClientAndContinue} className="btn btn-primary" style={{ padding: '10px 22px', fontSize: '13px' }}>Continue → Booking Details</button>
@@ -3200,13 +3225,61 @@ function ClientsView({ clients, saveClients, colors, allBookings, exportClientsE
               <Field label="Name *"><input className="input" value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} /></Field>
               <Field label="Phone"><input className="input" value={editing.phone} onChange={e => setEditing({ ...editing, phone: e.target.value })} placeholder="+971 50 ..." /></Field>
               <Field label="Address">
-                <textarea className="input" value={editing.address} onChange={e => setEditing({ ...editing, address: e.target.value })} placeholder="Apt 101, Building Name, Area, Abu Dhabi" rows="2" style={{ resize: 'vertical' }} />
+                <textarea
+                  className="input"
+                  value={editing.address}
+                  onChange={e => setEditing({ ...editing, address: e.target.value })}
+                  onPaste={e => {
+                    // Smart paste: if the pasted text is a Google Maps link or coords,
+                    // extract lat/lng and auto-pin the location.
+                    const pasted = e.clipboardData?.getData('text') || '';
+                    if (!pasted) return;
+                    const parsed = parseLocationInput(pasted);
+                    if (parsed.lat && parsed.lng) {
+                      e.preventDefault();
+                      setEditing({ ...editing, address: parsed.address, lat: parsed.lat, lng: parsed.lng });
+                    }
+                  }}
+                  placeholder="Apt 101, Building Name, Area, Abu Dhabi  (or paste Google Maps link to auto-pin)"
+                  rows="2"
+                  style={{ resize: 'vertical' }}
+                />
               </Field>
               <Field label="Pin Location on Map">
-                <button type="button" className="btn" onClick={() => setShowPinPicker(true)} style={{ background: editing.lat ? colors.accentLight : 'white', borderColor: editing.lat ? colors.accent : colors.border, justifyContent: 'flex-start', width: '100%' }}>
-                  <MapPin size={14} style={{ color: editing.lat ? colors.accent : colors.ink + '99' }} />
-                  {editing.lat ? `📍 Pinned at ${editing.lat.toFixed(5)}, ${editing.lng.toFixed(5)}` : 'Click to pin location on map'}
-                </button>
+                <div style={{ display: 'flex', gap: '6px', flexDirection: 'column' }}>
+                  <button type="button" className="btn" onClick={() => setShowPinPicker(true)} style={{ background: editing.lat ? colors.accentLight : 'white', borderColor: editing.lat ? colors.accent : colors.border, justifyContent: 'flex-start', width: '100%' }}>
+                    <MapPin size={14} style={{ color: editing.lat ? colors.accent : colors.ink + '99' }} />
+                    {editing.lat ? `📍 Pinned at ${editing.lat.toFixed(5)}, ${editing.lng.toFixed(5)}` : 'Click to pin location on map'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{ background: '#25D366', borderColor: '#25D366', color: 'white', fontWeight: 600, width: '100%' }}
+                    onClick={async () => {
+                      try {
+                        const text = await navigator.clipboard.readText();
+                        if (!text) {
+                          alert('Clipboard is empty.\n\nHow to copy a Google Maps link:\n1. Open Google Maps\n2. Find the client location\n3. Click Share → Copy link\n4. Come back here and click this button again');
+                          return;
+                        }
+                        const parsed = parseLocationInput(text);
+                        if (parsed.lat && parsed.lng) {
+                          setEditing({ ...editing, address: parsed.address || editing.address, lat: parsed.lat, lng: parsed.lng });
+                          alert(`✓ Pinned at ${parsed.lat.toFixed(5)}, ${parsed.lng.toFixed(5)}`);
+                        } else if (parsed.isShortLink) {
+                          alert('⚠️ Short Google Maps link (maps.app.goo.gl) saved as address, but the exact GPS point could not be extracted.\n\nTO GET THE EXACT PIN:\n1. Open the link in Google Maps\n2. Long-press on the pin → the coordinates appear\n3. Tap the coordinates to copy them\n4. Come back and click this button again');
+                          setEditing({ ...editing, address: text });
+                        } else {
+                          alert('No GPS coordinates found in the clipboard.\n\nMake sure you copied:\n• A Google Maps URL with /@lat,lng/\n• OR plain coordinates like "24.4539, 54.3773"');
+                        }
+                      } catch (err) {
+                        alert('Could not read clipboard. Try pasting directly into the Address field above instead.');
+                      }
+                    }}
+                  >
+                    📱 Paste Google Maps link from clipboard
+                  </button>
+                </div>
                 {editing.lat && (
                   <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                     <a href={`https://www.google.com/maps/?q=${editing.lat},${editing.lng}`} target="_blank" rel="noreferrer" style={{ fontSize: '11px', color: colors.accent, fontWeight: 600 }}>
@@ -7377,6 +7450,32 @@ function LocationPickerModal({ title, initialLat, initialLng, initialAddress, on
           </button>
           <button className="btn" onClick={useCurrentLocation}>
             <Navigation size={14} /> My location
+          </button>
+          <button
+            className="btn"
+            style={{ background: '#25D366', borderColor: '#25D366', color: 'white' }}
+            title="Paste a Google Maps link copied to clipboard"
+            onClick={async () => {
+              try {
+                const text = await navigator.clipboard.readText();
+                if (!text) { alert('Clipboard is empty.\n\n1. Open Google Maps\n2. Share → Copy link\n3. Click this button again'); return; }
+                const parsed = parseLocationInput(text);
+                if (parsed.lat && parsed.lng) {
+                  setLat(parsed.lat); setLng(parsed.lng);
+                  if (parsed.address && !address) setAddress(parsed.address);
+                  if (mapInstanceRef.current && markerRef.current) {
+                    mapInstanceRef.current.setView([parsed.lat, parsed.lng], 17);
+                    markerRef.current.setLatLng([parsed.lat, parsed.lng]);
+                  }
+                } else if (parsed.isShortLink) {
+                  alert('⚠️ Short link — GPS not extracted. Open the link in Google Maps, long-press the pin, copy coordinates, then paste again.');
+                } else {
+                  alert('No GPS found in clipboard.');
+                }
+              } catch (err) { alert('Could not read clipboard.'); }
+            }}
+          >
+            📱 Paste map link
           </button>
         </div>
         <div ref={mapRef} style={{ height: '400px', width: '100%', borderRadius: '8px', border: `1px solid ${colors.border}`, marginBottom: '10px' }}></div>
