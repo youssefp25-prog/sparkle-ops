@@ -366,7 +366,16 @@ const buildDailyPlan = (patterns, targetDateStr, savedDays, currentBookings, cur
 
       return { pattern, status, confidence: match.confidence, reason: match.reason, isBooked, bookingRow: existingBooking, conflict, match: match.match };
     })
-    .filter(r => r.match || r.isBooked);
+    .filter(r => r.match || r.isBooked)
+    // ===== PRIORITIZE BY MOST ACTIVE CLIENT =====
+    // Sort each list so the most active clients (highest visit count in last 2 months)
+    // appear first. Tie-break by revenue so bigger clients also rise.
+    .sort((a, b) => {
+      const va = a.pattern.visits_2mo || 0;
+      const vb = b.pattern.visits_2mo || 0;
+      if (vb !== va) return vb - va;
+      return (b.pattern.rev_2mo || 0) - (a.pattern.rev_2mo || 0);
+    });
 };
 
 // ===== PASSWORD GATE HELPERS =====
@@ -1431,21 +1440,9 @@ export default function CleaningApp() {
       });
     });
 
-    // 2. Pre-scheduled bookings for today
-    scheduledBookings.filter(s => s.date === date && s.status === 'pending' && !s.autoAdded).forEach(s => {
-      const trial = { cleaner: s.cleaner, timing: s.timing, clientId: s.clientId, clientName: s.clientName };
-      if (existingKeys.has(bookingDedupeKey(trial, date))) return;
-      existingKeys.add(bookingDedupeKey(trial, date));
-      toAdd.push({
-        ...emptyBooking(),
-        cleaner: s.cleaner, timing: s.timing, clientId: s.clientId,
-        clientName: s.clientName, location: s.location, phone: s.phone,
-        lat: s.lat, lng: s.lng,
-        pricePerHour: s.pricePerHour, withMaterials: s.withMaterials, paymentType: s.paymentType,
-        pickupType: s.pickupType, notes: s.notes || '',
-        source: 'scheduled', scheduledId: s.id,
-      });
-    });
+    // 2. Pre-scheduled bookings (Book Later) — INTENTIONALLY NOT AUTO-ADDED HERE.
+    //    These remain visible in the Plan tab as suggestions that need manual review
+    //    before being added to the actual booking list. User requested this safety gate.
 
     if (toAdd.length > 0) {
       const cleaned = bookings.filter(b => b.clientName || b.location);
@@ -2460,7 +2457,7 @@ export default function CleaningApp() {
           </div>
         )}
         {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} smartSuggestionsOff={smartSuggestionsOff} isAdminMode={isAdminMode} isDayReadOnlyForAdmin={isDayReadOnlyForAdmin} />}
-        {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} />}
+        {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} />}
@@ -4385,7 +4382,7 @@ function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
 //   - 7-day forecast
 // Also includes a WhatsApp "Contact Client" quick-action.
 // =====================================================================
-function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, setBookings, date, colors, clients, companyInfo, allCleaners, setView, setDate, showStatus }) {
+function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, setBookings, date, colors, clients, companyInfo, allCleaners, setView, setDate, showStatus, scheduledBookings = [], saveScheduledBookings }) {
   const [targetDate, setTargetDate] = React.useState(date);
   const [search, setSearch] = React.useState('');
   React.useEffect(() => { setTargetDate(date); }, [date]);
@@ -4424,6 +4421,12 @@ function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, 
     const d = new Date(dStr + 'T12:00:00');
     return d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   };
+
+  // Scheduled bookings (Book Later) for the target date — shown as suggestions requiring
+  // manual review before being added to the actual booking list.
+  const scheduledForDay = React.useMemo(() => {
+    return (scheduledBookings || []).filter(s => s.date === targetDate && s.status === 'pending');
+  }, [scheduledBookings, targetDate]);
 
   // 7-day forecast
   const forecast7 = React.useMemo(() => {
@@ -4519,6 +4522,49 @@ function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, 
     setView('input');
   };
 
+  // Confirm a scheduled booking: add it to the actual day + mark it as added.
+  const confirmScheduled = (s) => {
+    const newBooking = {
+      id: 'b_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      clientId: s.clientId, clientName: s.clientName,
+      phone: s.phone || '', location: s.location || '', lat: s.lat, lng: s.lng,
+      cleaner: s.cleaner || 'Leah', timing: s.timing || '',
+      pricePerHour: s.pricePerHour || 25,
+      withMaterials: !!s.withMaterials,
+      paymentType: s.paymentType || 'ONLINE',
+      pickupType: s.pickupType || 'OFFICE',
+      paymentStatus: 'PENDING', notes: s.notes || '',
+    };
+    const currentDateStr = date;
+    if (targetDate === currentDateStr) {
+      const kept = bookings.filter(b => b.clientName || b.location || (b.cleaner !== 'Leah') || b.timing);
+      setBookings([...kept, newBooking]);
+    } else {
+      const existing = savedDays[targetDate]?.bookings || [];
+      const updated = { ...savedDays, [targetDate]: { bookings: [...existing, newBooking], savedAt: new Date().toISOString() } };
+      setSavedDays(updated);
+      try { localStorage.setItem('sparkle_all_days', JSON.stringify(updated)); } catch (e) {}
+    }
+    // Mark the scheduled booking as added so it stops showing as a suggestion
+    if (saveScheduledBookings) {
+      const next = scheduledBookings.map(x => x.id === s.id ? { ...x, status: 'added', autoAdded: true } : x);
+      saveScheduledBookings(next);
+    }
+    showStatus && showStatus(`✓ Added ${s.clientName} to ${targetDate}`);
+    setDate(targetDate);
+    setView('input');
+  };
+
+  // Dismiss a scheduled booking (mark as cancelled so it stops suggesting).
+  const dismissScheduled = (s) => {
+    if (!confirm(`Dismiss the Book Later for ${s.clientName} on ${s.date}?\n\nThis won't delete anything, just removes it from the Plan suggestions.`)) return;
+    if (saveScheduledBookings) {
+      const next = scheduledBookings.map(x => x.id === s.id ? { ...x, status: 'cancelled' } : x);
+      saveScheduledBookings(next);
+    }
+    showStatus && showStatus(`✓ Dismissed ${s.clientName}`);
+  };
+
   const Row = ({ r, showContactBtn }) => {
     const p = r.pattern;
     const confColor = r.confidence === 'HIGH' ? colors.accent : r.confidence === 'MEDIUM' ? colors.gold : colors.ink + '99';
@@ -4534,8 +4580,22 @@ function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, 
         alignItems: 'center',
       }}>
         <div>
-          <div style={{ fontSize: '14px', fontWeight: 700 }}>{p.client_name}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '14px', fontWeight: 700 }}>{p.client_name}</span>
+            {(() => {
+              const visits = p.visits_2mo || 0;
+              let tier = null;
+              if (visits >= 30) tier = { label: '🔥 TOP CLIENT', bg: '#FEE2E2', color: '#991B1B' };
+              else if (visits >= 10) tier = { label: '⭐ HIGH', bg: '#FEF3C7', color: '#78350F' };
+              else if (visits >= 5) tier = { label: '✓ REGULAR', bg: '#DBEAFE', color: '#1E40AF' };
+              if (!tier) return null;
+              return <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: tier.bg, color: tier.color, letterSpacing: '0.3px' }}>{tier.label}</span>;
+            })()}
+          </div>
           <div style={{ fontSize: '11px', color: colors.ink + '99', marginTop: '2px' }}>{r.reason}</div>
+          <div style={{ fontSize: '10px', color: colors.ink + '77', marginTop: '2px' }}>
+            {p.visits_2mo || 0} visits · {(p.rev_2mo || 0).toFixed(0)} AED last 2mo
+          </div>
         </div>
         <div>
           <div style={{ fontSize: '11px', color: colors.ink + '77', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Cadence</div>
@@ -4609,6 +4669,53 @@ function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, 
           <div style={{ fontWeight: 700, color: '#78350F', marginBottom: '4px' }}>⚠️ No recurring client patterns loaded</div>
           <div style={{ fontSize: '12px', color: '#7F1D1D' }}>
             Run <strong>recurring_clients_setup.sql</strong> in your Supabase SQL Editor to seed the 53 known client patterns. Then reload this page.
+          </div>
+        </div>
+      )}
+
+      {/* ===== 📌 BOOK LATER — PRE-SCHEDULED BOOKINGS (require manual review) ===== */}
+      {scheduledForDay.length > 0 && (
+        <div style={{ background: 'white', borderRadius: '12px', border: `2px solid ${colors.gold}`, padding: '18px', marginBottom: '14px' }}>
+          <h3 className="display-font" style={{ margin: '0 0 6px', fontSize: '17px', fontWeight: 700, color: '#78350F' }}>
+            📌 Book Later suggestions ({scheduledForDay.length}) — review before adding
+          </h3>
+          <p style={{ fontSize: '12px', color: colors.ink + '99', margin: '0 0 12px' }}>
+            These bookings were pre-scheduled via Book Later. They are NOT yet in the actual booking list — click <strong>Add to day</strong> to confirm each one.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {scheduledForDay.map(s => (
+              <div key={s.id} style={{
+                background: 'white',
+                border: `1.5px solid ${colors.border}`,
+                borderRadius: '10px',
+                padding: '12px 14px',
+                display: 'grid',
+                gridTemplateColumns: 'minmax(170px, 1.4fr) minmax(100px, 0.8fr) minmax(120px, 1fr) auto',
+                gap: '10px',
+                alignItems: 'center',
+              }}>
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: 700 }}>{s.clientName}</div>
+                  <div style={{ fontSize: '11px', color: colors.ink + '99', marginTop: '2px' }}>{s.location || '—'}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '11px', color: colors.ink + '77', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Time</div>
+                  <div className="mono" style={{ fontSize: '13px', fontWeight: 600 }}>{s.timing}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '11px', color: colors.ink + '77', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Cleaner</div>
+                  <div style={{ fontSize: '13px', fontWeight: 600 }}>{s.cleaner || '—'}</div>
+                </div>
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  <button className="btn btn-sm" style={{ background: colors.accent, color: 'white', borderColor: colors.accent, fontSize: '11px', padding: '4px 10px' }} onClick={() => confirmScheduled(s)}>
+                    ✓ Add to day
+                  </button>
+                  <button className="btn btn-sm" style={{ fontSize: '11px', padding: '4px 10px' }} onClick={() => dismissScheduled(s)}>
+                    ✕ Dismiss
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
