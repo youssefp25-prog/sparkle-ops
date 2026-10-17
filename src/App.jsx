@@ -128,7 +128,7 @@ const formatMinutes = (m) => {
 // clients = different colors in the same cleaner's column.
 // Uses djb2 hash → HSL hue for determinism without a color palette size limit.
 const clientColor = (clientName) => {
-  if (!clientName || !clientName.trim()) return { bg: 'white', border: 'transparent' };
+  if (!clientName || !clientName.trim()) return { bg: 'white', border: '#9CA3AF' };
   const key = clientName.trim().toLowerCase();
   let hash = 5381;
   for (let i = 0; i < key.length; i++) {
@@ -136,12 +136,13 @@ const clientColor = (clientName) => {
     hash = hash & 0xffffffff;
   }
   const hue = Math.abs(hash) % 360;
-  // Very light pastels (lightness 94%) → strong contrast with bold black text.
-  // Border is a saturated version of the same hue to make the client identity obvious.
+  // Clean design: strong saturated border stripe identifies the client. The CELL
+  // itself stays white so bold black text has maximum contrast. Same client across
+  // cleaners = same colored stripe (makes team bookings instantly recognizable).
   return {
-    bg: `hsl(${hue}, 70%, 94%)`,
-    border: `hsl(${hue}, 60%, 55%)`,
-    accent: `hsl(${hue}, 60%, 32%)`,
+    bg: `hsl(${hue}, 70%, 97%)`,
+    border: `hsl(${hue}, 65%, 48%)`,
+    accent: `hsl(${hue}, 60%, 28%)`,
   };
 };
 
@@ -5170,8 +5171,8 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
                   });
                   return (
                     <td key={cleaner} className="deployment-cell" style={{
-                      background: cellHasConflict ? '#FEE2E2' : 'white',
-                      padding: '4px 4px',
+                      background: cellHasConflict ? '#FEE2E2' : '#F9FAFB',
+                      padding: '6px',
                       outline: cellHasConflict ? '3px solid #DC2626' : 'none',
                       outlineOffset: '-3px',
                       position: 'relative',
@@ -5180,28 +5181,42 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
                       {jobs.map((job, idx) => {
                         const globalIdx = (byCleaner[cleaner] || []).indexOf(job);
                         const flagged = isConflicted(job, globalIdx >= 0 ? globalIdx : idx, cleaner);
-                        // Per-client pastel background so same client across cleaners = same color.
-                        // ALL text stays BLACK + BOLD for maximum readability on colored backgrounds.
+                        // Clean design: white background, 4px colored stripe on the left
+                        // identifies the client, pure black bold text for readability.
                         const cc = clientColor(job.clientName);
                         return (
                           <div key={idx} style={{
-                            padding: '6px 8px',
-                            marginBottom: idx < jobs.length - 1 ? '4px' : 0,
-                            background: flagged ? 'rgba(220, 38, 38, 0.12)' : cc.bg,
-                            borderRadius: '6px',
-                            borderLeft: `3px solid ${flagged ? '#DC2626' : cc.border}`,
-                            color: '#000000',
+                            padding: '8px 10px 8px 12px',
+                            marginBottom: idx < jobs.length - 1 ? '6px' : 0,
+                            background: flagged ? '#FEF2F2' : '#FFFFFF',
+                            borderLeft: `5px solid ${flagged ? '#DC2626' : cc.border}`,
+                            borderRadius: '3px',
+                            boxShadow: '0 0 0 1px #E5E7EB',
                           }}>
                             {flagged && (
-                              <div style={{ fontSize: '10px', fontWeight: 800, color: '#991B1B', marginBottom: '2px', letterSpacing: '0.3px' }}>
+                              <div style={{ fontSize: '10px', fontWeight: 800, color: '#991B1B', marginBottom: '4px', letterSpacing: '0.3px' }}>
                                 🚨 CONFLICT
                               </div>
                             )}
-                            <div style={{ fontWeight: 800, fontSize: '13px', marginBottom: '3px', color: '#000000' }}>{job.clientName}</div>
-                            <div style={{ fontSize: '11px', lineHeight: '1.4', fontWeight: 700, color: '#000000' }}>{job.location}</div>
-                            {job.withMaterials && <div style={{ fontSize: '10px', color: '#000000', fontWeight: 800, marginTop: '3px', background: 'white', padding: '1px 6px', borderRadius: '3px', display: 'inline-block', border: '1px solid #000' }}>w/ materials</div>}
-                            <div className="mono" style={{ fontSize: '12px', fontWeight: 800, marginTop: '4px', color: '#000000' }}>{job.timing}</div>
-                            <div className="mono" style={{ fontSize: '12px', fontWeight: 800, color: '#000000', marginTop: '3px' }}>({job.total.toFixed(0)} AED/{job.paymentType === 'CASH' ? 'C' : 'O'})</div>
+                            <div style={{ fontWeight: 800, fontSize: '13px', marginBottom: '4px', color: '#000', lineHeight: 1.2 }}>
+                              {job.clientName}
+                            </div>
+                            <div style={{ fontSize: '11px', fontWeight: 500, color: '#374151', lineHeight: 1.35, marginBottom: '6px' }}>
+                              {job.location}
+                            </div>
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                              <span className="mono" style={{ fontSize: '12px', fontWeight: 700, color: '#000', background: '#F3F4F6', padding: '2px 6px', borderRadius: '3px' }}>
+                                {job.timing}
+                              </span>
+                              <span className="mono" style={{ fontSize: '11px', fontWeight: 600, color: '#374151' }}>
+                                {job.total.toFixed(0)} AED · {job.paymentType === 'CASH' ? 'Cash' : 'Online'}
+                              </span>
+                            </div>
+                            {job.withMaterials && (
+                              <div style={{ fontSize: '10px', fontWeight: 700, color: '#1E40AF', marginTop: '5px', background: '#DBEAFE', padding: '2px 6px', borderRadius: '3px', display: 'inline-block', letterSpacing: '0.3px' }}>
+                                W/ MATERIALS
+                              </div>
+                            )}
                           </div>
                         );
                       })}
