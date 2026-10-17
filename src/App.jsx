@@ -128,7 +128,7 @@ const formatMinutes = (m) => {
 // clients = different colors in the same cleaner's column.
 // Uses djb2 hash → HSL hue for determinism without a color palette size limit.
 const clientColor = (clientName) => {
-  if (!clientName || !clientName.trim()) return { bg: 'white', border: '#9CA3AF' };
+  if (!clientName || !clientName.trim()) return { bg: '#F9FAFB', border: '#D1D5DB' };
   const key = clientName.trim().toLowerCase();
   let hash = 5381;
   for (let i = 0; i < key.length; i++) {
@@ -136,12 +136,11 @@ const clientColor = (clientName) => {
     hash = hash & 0xffffffff;
   }
   const hue = Math.abs(hash) % 360;
-  // Clean design: strong saturated border stripe identifies the client. The CELL
-  // itself stays white so bold black text has maximum contrast. Same client across
-  // cleaners = same colored stripe (makes team bookings instantly recognizable).
+  // Soft pastel tile style — like Google Calendar / Linear. Same client across cleaners
+  // = same color. Border is a slightly darker shade of the same hue for a card edge.
   return {
-    bg: `hsl(${hue}, 70%, 97%)`,
-    border: `hsl(${hue}, 65%, 48%)`,
+    bg: `hsl(${hue}, 72%, 88%)`,
+    border: `hsl(${hue}, 55%, 70%)`,
     accent: `hsl(${hue}, 60%, 28%)`,
   };
 };
@@ -5134,8 +5133,8 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
           </div>
         </div>
       )}
-      <div style={{ background: 'white', padding: '24px', borderRadius: '8px', border: `1px solid ${colors.border}` }}>
-        <div style={{ background: colors.headerGreen, color: 'white', textAlign: 'center', padding: '14px', fontSize: '20px', fontWeight: 700, fontFamily: 'Fraunces, serif', border: `2px solid ${colors.ink}`, borderBottom: 'none' }}>Deployment — {formatDate(date)}</div>
+      <div style={{ background: 'white', padding: '0', borderRadius: '8px', border: `2px solid ${colors.ink}`, overflow: 'hidden' }}>
+        <div style={{ background: colors.headerGreen, color: 'white', textAlign: 'center', padding: '14px', fontSize: '20px', fontWeight: 700, fontFamily: 'Fraunces, serif' }}>Deployment — {formatDate(date)}</div>
         <table className="grid-table">
           <thead>
             <tr>
@@ -5181,42 +5180,43 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
                       {jobs.map((job, idx) => {
                         const globalIdx = (byCleaner[cleaner] || []).indexOf(job);
                         const flagged = isConflicted(job, globalIdx >= 0 ? globalIdx : idx, cleaner);
-                        // Clean design: white background, 4px colored stripe on the left
-                        // identifies the client, pure black bold text for readability.
+                        // Google-Calendar-style tile: full pastel background per client,
+                        // rounded corners, centered text, bold black for readability.
                         const cc = clientColor(job.clientName);
+                        const payDot = job.paymentType === 'CASH' ? '#F59E0B' : '#2563EB';
                         return (
                           <div key={idx} style={{
-                            padding: '8px 10px 8px 12px',
+                            padding: '10px 10px 11px',
                             marginBottom: idx < jobs.length - 1 ? '6px' : 0,
-                            background: flagged ? '#FEF2F2' : '#FFFFFF',
-                            borderLeft: `5px solid ${flagged ? '#DC2626' : cc.border}`,
-                            borderRadius: '3px',
-                            boxShadow: '0 0 0 1px #E5E7EB',
+                            background: flagged ? '#FEE2E2' : cc.bg,
+                            border: `1.5px solid ${flagged ? '#DC2626' : cc.border}`,
+                            borderRadius: '10px',
+                            textAlign: 'center',
+                            color: '#000',
                           }}>
                             {flagged && (
-                              <div style={{ fontSize: '10px', fontWeight: 800, color: '#991B1B', marginBottom: '4px', letterSpacing: '0.3px' }}>
+                              <div style={{ fontSize: '10px', fontWeight: 800, color: '#991B1B', marginBottom: '3px', letterSpacing: '0.3px' }}>
                                 🚨 CONFLICT
                               </div>
                             )}
-                            <div style={{ fontWeight: 800, fontSize: '13px', marginBottom: '4px', color: '#000', lineHeight: 1.2 }}>
+                            <div style={{ fontWeight: 800, fontSize: '13px', color: '#111827', lineHeight: 1.2 }}>
                               {job.clientName}
                             </div>
-                            <div style={{ fontSize: '11px', fontWeight: 500, color: '#374151', lineHeight: 1.35, marginBottom: '6px' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 500, color: '#374151', lineHeight: 1.35, marginTop: '4px' }}>
                               {job.location}
                             </div>
-                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                              <span className="mono" style={{ fontSize: '12px', fontWeight: 700, color: '#000', background: '#F3F4F6', padding: '2px 6px', borderRadius: '3px' }}>
-                                {job.timing}
-                              </span>
-                              <span className="mono" style={{ fontSize: '11px', fontWeight: 600, color: '#374151' }}>
-                                {job.total.toFixed(0)} AED · {job.paymentType === 'CASH' ? 'Cash' : 'Online'}
-                              </span>
-                            </div>
                             {job.withMaterials && (
-                              <div style={{ fontSize: '10px', fontWeight: 700, color: '#1E40AF', marginTop: '5px', background: '#DBEAFE', padding: '2px 6px', borderRadius: '3px', display: 'inline-block', letterSpacing: '0.3px' }}>
-                                W/ MATERIALS
+                              <div style={{ display: 'inline-block', marginTop: '6px', fontSize: '10px', fontWeight: 600, color: '#111827', background: 'rgba(255,255,255,0.75)', padding: '2px 10px', borderRadius: '10px', border: `1px solid ${cc.border}` }}>
+                                w/ materials
                               </div>
                             )}
+                            <div className="mono" style={{ fontSize: '13px', fontWeight: 800, color: '#111827', marginTop: '6px' }}>
+                              {job.timing}
+                            </div>
+                            <div className="mono" style={{ fontSize: '11px', fontWeight: 600, color: '#111827', marginTop: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+                              <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: payDot, display: 'inline-block' }}></span>
+                              ({job.total.toFixed(0)} AED/{job.paymentType === 'CASH' ? 'C' : 'O'})
+                            </div>
                           </div>
                         );
                       })}
