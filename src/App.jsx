@@ -5432,7 +5432,7 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
           <thead>
             <tr>
               <th className="display-font" style={{ width: '52px', background: colors.headerGreen, color: 'white', fontSize: '12px' }}>Slot</th>
-              {displayCleaners.map(c => <th key={c} className="display-font">{c}</th>)}
+              {displayCleaners.map(c => <th key={c} className="display-font" style={{ fontSize: '16px', fontWeight: 700, padding: '12px 8px' }}>{c}</th>)}
             </tr>
           </thead>
           <tbody>
@@ -5475,12 +5475,13 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
                         const flagged = isConflicted(job, globalIdx >= 0 ? globalIdx : idx, cleaner);
                         // Google-Calendar-style tile: full pastel background per client,
                         // rounded corners, centered text, bold black for readability.
+                        // Font sizes bumped up for crisper reading at normal screen distance.
                         const cc = clientColor(job.clientName);
                         const payDot = job.paymentType === 'CASH' ? '#F59E0B' : '#2563EB';
                         return (
                           <div key={idx} style={{
-                            padding: '10px 10px 11px',
-                            marginBottom: idx < jobs.length - 1 ? '6px' : 0,
+                            padding: '12px 11px 13px',
+                            marginBottom: idx < jobs.length - 1 ? '8px' : 0,
                             background: flagged ? '#FEE2E2' : cc.bg,
                             border: `1.5px solid ${flagged ? '#DC2626' : cc.border}`,
                             borderRadius: '10px',
@@ -5488,26 +5489,26 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
                             color: '#000',
                           }}>
                             {flagged && (
-                              <div style={{ fontSize: '10px', fontWeight: 800, color: '#991B1B', marginBottom: '3px', letterSpacing: '0.3px' }}>
+                              <div style={{ fontSize: '11px', fontWeight: 800, color: '#991B1B', marginBottom: '4px', letterSpacing: '0.3px' }}>
                                 🚨 CONFLICT
                               </div>
                             )}
-                            <div style={{ fontWeight: 800, fontSize: '13px', color: '#111827', lineHeight: 1.2 }}>
+                            <div style={{ fontWeight: 800, fontSize: '15px', color: '#000000', lineHeight: 1.2 }}>
                               {job.clientName}
                             </div>
-                            <div style={{ fontSize: '11px', fontWeight: 500, color: '#374151', lineHeight: 1.35, marginTop: '4px' }}>
+                            <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#1F2937', lineHeight: 1.4, marginTop: '5px' }}>
                               {job.location}
                             </div>
                             {job.withMaterials && (
-                              <div style={{ display: 'inline-block', marginTop: '6px', fontSize: '10px', fontWeight: 600, color: '#111827', background: 'rgba(255,255,255,0.75)', padding: '2px 10px', borderRadius: '10px', border: `1px solid ${cc.border}` }}>
+                              <div style={{ display: 'inline-block', marginTop: '7px', fontSize: '11.5px', fontWeight: 700, color: '#000000', background: 'rgba(255,255,255,0.85)', padding: '3px 11px', borderRadius: '10px', border: `1px solid ${cc.border}` }}>
                                 w/ materials
                               </div>
                             )}
-                            <div className="mono" style={{ fontSize: '13px', fontWeight: 800, color: '#111827', marginTop: '6px' }}>
+                            <div className="mono" style={{ fontSize: '15px', fontWeight: 800, color: '#000000', marginTop: '7px', letterSpacing: '0.3px' }}>
                               {job.timing}
                             </div>
-                            <div className="mono" style={{ fontSize: '11px', fontWeight: 600, color: '#111827', marginTop: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
-                              <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: payDot, display: 'inline-block' }}></span>
+                            <div className="mono" style={{ fontSize: '12.5px', fontWeight: 700, color: '#000000', marginTop: '5px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: payDot, display: 'inline-block' }}></span>
                               ({job.total.toFixed(0)} AED/{job.paymentType === 'CASH' ? 'C' : 'O'})
                             </div>
                           </div>
