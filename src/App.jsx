@@ -401,6 +401,105 @@ const buildDailyPlan = (patterns, targetDateStr, savedDays, currentBookings, cur
     });
 };
 
+// =====================================================================
+// HISTORICAL PATTERN ANALYZER — "Who booked on past Sundays?"
+// Looks at the last N days of savedDays, filters to the same day-of-week
+// as the target date, groups by client, and suggests clients with 2+ visits.
+// Returns most common cleaner, time, rate, materials, payment per client.
+// =====================================================================
+const analyzeHistoricalPattern = (targetDateStr, savedDays, lookbackDays = 60) => {
+  if (!targetDateStr || !savedDays) return [];
+  const target = new Date(targetDateStr + 'T12:00:00');
+  const targetDOW = target.getDay(); // 0=Sun .. 6=Sat
+  const cutoff = new Date(target);
+  cutoff.setDate(cutoff.getDate() - lookbackDays);
+
+  // Already booked on target date? (we exclude those from suggestions)
+  const bookedOnTarget = new Set(
+    ((savedDays[targetDateStr] || {}).bookings || [])
+      .map(b => (b.clientName || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+
+  // Collect all bookings from matching day-of-week within the lookback window
+  const byClient = {};
+  Object.entries(savedDays).forEach(([dateStr, day]) => {
+    const d = new Date(dateStr + 'T12:00:00');
+    if (d.getDay() !== targetDOW) return;
+    if (d < cutoff || d >= target) return; // past window, excl. target itself
+    (day.bookings || []).forEach(b => {
+      const name = (b.clientName || '').trim();
+      if (!name) return;
+      const key = name.toLowerCase();
+      if (!byClient[key]) {
+        byClient[key] = {
+          clientName: name, clientId: b.clientId || null,
+          count: 0, dates: [],
+          cleaners: {}, timings: {}, rates: {}, materials: { yes: 0, no: 0 },
+          payments: {}, locations: {}, phones: {},
+          lats: [], lngs: [], totalRev: 0,
+        };
+      }
+      const c = byClient[key];
+      c.count += 1;
+      c.dates.push(dateStr);
+      if (b.cleaner) c.cleaners[b.cleaner] = (c.cleaners[b.cleaner] || 0) + 1;
+      if (b.timing) c.timings[b.timing] = (c.timings[b.timing] || 0) + 1;
+      if (b.pricePerHour != null) c.rates[b.pricePerHour] = (c.rates[b.pricePerHour] || 0) + 1;
+      c.materials[b.withMaterials ? 'yes' : 'no']++;
+      if (b.paymentType) c.payments[b.paymentType] = (c.payments[b.paymentType] || 0) + 1;
+      if (b.location) c.locations[b.location] = (c.locations[b.location] || 0) + 1;
+      if (b.phone) c.phones[b.phone] = (c.phones[b.phone] || 0) + 1;
+      if (b.lat != null) c.lats.push(b.lat);
+      if (b.lng != null) c.lngs.push(b.lng);
+      c.totalRev += Number(b.total || 0);
+    });
+  });
+
+  const mostCommon = (obj) => {
+    const entries = Object.entries(obj);
+    if (entries.length === 0) return null;
+    entries.sort((a, b) => b[1] - a[1]);
+    return { value: entries[0][0], count: entries[0][1], total: entries.reduce((s, e) => s + e[1], 0) };
+  };
+
+  const avg = (arr) => arr.length ? arr.reduce((s, n) => s + n, 0) / arr.length : null;
+
+  return Object.values(byClient)
+    // Include ANY client who booked at least once on the same day-of-week
+    // in the last 60 days. User wants even single-visit clients suggested.
+    .filter(c => c.count >= 1 && !bookedOnTarget.has(c.clientName.toLowerCase()))
+    .map(c => {
+      const cleaner = mostCommon(c.cleaners);
+      const timing = mostCommon(c.timings);
+      const rate = mostCommon(c.rates);
+      const payment = mostCommon(c.payments);
+      const location = mostCommon(c.locations);
+      const phone = mostCommon(c.phones);
+      const lastSeen = c.dates.sort().slice(-1)[0];
+      return {
+        clientName: c.clientName,
+        clientId: c.clientId,
+        count: c.count,
+        dates: c.dates.sort(),
+        lastSeen,
+        cleaner: cleaner?.value || '',
+        cleanerPct: cleaner ? Math.round(cleaner.count / cleaner.total * 100) : 0,
+        timing: timing?.value || '',
+        timingPct: timing ? Math.round(timing.count / timing.total * 100) : 0,
+        rate: rate ? Number(rate.value) : 25,
+        withMaterials: c.materials.yes > c.materials.no,
+        paymentType: payment?.value || 'ONLINE',
+        location: location?.value || '',
+        phone: phone?.value || '',
+        lat: c.lats.length ? avg(c.lats) : null,
+        lng: c.lngs.length ? avg(c.lngs) : null,
+        avgRev: c.totalRev / c.count,
+      };
+    })
+    .sort((a, b) => b.count - a.count || b.avgRev - a.avgRev);
+};
+
 // ===== PASSWORD GATE HELPERS =====
 // Hashes a plaintext password with SHA-256 and returns a hex string.
 // This way the password never gets stored in plaintext anywhere.
@@ -4538,6 +4637,55 @@ function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, 
     return (scheduledBookings || []).filter(s => s.date === targetDate && s.status === 'pending');
   }, [scheduledBookings, targetDate]);
 
+  // ===== HISTORICAL SUGGESTIONS =====
+  // Looks at the last 60 days and finds clients who booked on the same day-of-week
+  // as the target date. Pre-fills with their most common cleaner/time/rate.
+  const historicalSuggestions = React.useMemo(() => {
+    return analyzeHistoricalPattern(targetDate, savedDays, 60);
+  }, [savedDays, targetDate]);
+
+  // Confirm a historical suggestion → create a booking with pre-filled details
+  const confirmHistoricalSuggestion = (sug) => {
+    // Prefer the client's current info from the Clients list, fall back to history
+    const client = (clients || []).find(cl =>
+      (cl.name || '').trim().toLowerCase() === sug.clientName.toLowerCase() ||
+      (sug.clientId && cl.id === sug.clientId)
+    );
+    const newBooking = {
+      id: 'b_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      clientId: client?.id || sug.clientId || null,
+      clientName: sug.clientName,
+      phone: client?.phone || sug.phone || '',
+      location: client?.address || sug.location || '',
+      lat: client?.lat != null ? client.lat : sug.lat,
+      lng: client?.lng != null ? client.lng : sug.lng,
+      cleaner: sug.cleaner || 'Leah',
+      timing: sug.timing || '',
+      pricePerHour: sug.rate || 25,
+      withMaterials: !!sug.withMaterials,
+      paymentType: sug.paymentType || 'ONLINE',
+      pickupType: 'OFFICE',
+      paymentStatus: 'PENDING', source: 'history',
+    };
+    const currentDateStr = date;
+    if (targetDate === currentDateStr) {
+      const kept = bookings.filter(b => b.clientName || b.location || (b.cleaner !== 'Leah') || b.timing);
+      setBookings([...kept, newBooking]);
+    } else {
+      const existing = savedDays[targetDate]?.bookings || [];
+      const updated = { ...savedDays, [targetDate]: { bookings: [...existing, newBooking], savedAt: new Date().toISOString() } };
+      setSavedDays(updated);
+      try { localStorage.setItem('sparkle_all_days', JSON.stringify(updated)); } catch (e) {}
+    }
+    showStatus && showStatus(`✓ Added ${sug.clientName} to ${targetDate}`);
+  };
+
+  const addAllHistorical = () => {
+    if (historicalSuggestions.length === 0) return;
+    if (!confirm(`Add all ${historicalSuggestions.length} historical suggestions to ${targetDate}?`)) return;
+    historicalSuggestions.forEach(sug => confirmHistoricalSuggestion(sug));
+  };
+
   // CONTRACTS due on the target date — only shown for FUTURE dates (today's are already
   // auto-filled). Each row represents a contract × cleaner combination. User can add
   // or dismiss each one individually to avoid accidental duplicates.
@@ -4843,7 +4991,7 @@ function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, 
         <div style={{ fontSize: '12px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>Target date</div>
         <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, marginBottom: '14px' }}>{formatDateLabel(targetDate)}</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '14px' }}>
-          <StatMiniLight label="Total expected" value={toContactDue.length + toContactLikely.length + overdue.length + confirmed.length + contractsForDay.length + scheduledForDay.length} />
+          <StatMiniLight label="Total expected" value={toContactDue.length + toContactLikely.length + overdue.length + confirmed.length + contractsForDay.length + scheduledForDay.length + historicalSuggestions.length} />
           <StatMiniLight label="✅ Confirmed" value={confirmed.length} />
           <StatMiniLight label="📞 To contact" value={toContactDue.length + toContactLikely.length} highlight />
           <StatMiniLight label="🔴 Overdue" value={overdue.length} />
@@ -4857,6 +5005,71 @@ function BookingPlanView({ recurringClients, savedDays, setSavedDays, bookings, 
           <div style={{ fontWeight: 700, color: '#78350F', marginBottom: '4px' }}>⚠️ No recurring client patterns loaded</div>
           <div style={{ fontSize: '12px', color: '#7F1D1D' }}>
             Run <strong>recurring_clients_setup.sql</strong> in your Supabase SQL Editor to seed the 53 known client patterns. Then reload this page.
+          </div>
+        </div>
+      )}
+
+      {/* ===== 🕐 HISTORICAL SUGGESTIONS — "Who booked past Sundays?" ===== */}
+      {historicalSuggestions.length > 0 && (
+        <div style={{ background: 'white', borderRadius: '12px', border: `2px solid #8B5CF6`, padding: '18px', marginBottom: '14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap', gap: '8px' }}>
+            <h3 className="display-font" style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: '#6D28D9' }}>
+              🕐 Last 60 days — same day of week ({historicalSuggestions.length})
+            </h3>
+            <button className="btn btn-primary btn-sm" onClick={addAllHistorical} style={{ background: '#8B5CF6', borderColor: '#8B5CF6' }}>+ Add all</button>
+          </div>
+          <p style={{ fontSize: '12px', color: colors.ink + '99', margin: '0 0 12px' }}>
+            Every client who booked on at least one {new Date(targetDate + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long' })} in the last 60 days — including one-time bookings. Sorted by frequency (most frequent first). Confirm with the client, then click <strong>+ Add</strong>.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {historicalSuggestions.map(sug => {
+              const lastSeenD = new Date(sug.lastSeen + 'T12:00:00');
+              const lastSeenLabel = lastSeenD.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+              return (
+                <div key={sug.clientName} style={{
+                  background: 'white',
+                  border: `1.5px solid ${colors.border}`,
+                  borderRadius: '10px',
+                  padding: '12px 14px',
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(170px, 1.4fr) minmax(100px, 0.8fr) minmax(130px, 1fr) minmax(80px, 0.6fr) auto',
+                  gap: '10px',
+                  alignItems: 'center',
+                }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 700 }}>{sug.clientName}</span>
+                      <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: '#EDE9FE', color: '#6D28D9', letterSpacing: '0.3px' }}>
+                        {sug.count}× in 60d
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '11px', color: colors.ink + '99', marginTop: '2px' }}>
+                      {sug.location || '—'}
+                    </div>
+                    <div style={{ fontSize: '10px', color: colors.ink + '77', marginTop: '2px' }}>
+                      Last booked {lastSeenLabel} · avg {sug.avgRev.toFixed(0)} AED
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', color: colors.ink + '77', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Time</div>
+                    <div className="mono" style={{ fontSize: '13px', fontWeight: 600 }}>{sug.timing}</div>
+                    <div style={{ fontSize: '10px', color: colors.ink + '77' }}>{sug.timingPct}% match</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', color: colors.ink + '77', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Cleaner</div>
+                    <div style={{ fontSize: '13px', fontWeight: 600 }}>{sug.cleaner}</div>
+                    <div style={{ fontSize: '10px', color: colors.ink + '77' }}>{sug.cleanerPct}% match</div>
+                  </div>
+                  <div style={{ fontSize: '11px', color: colors.ink + '99' }}>
+                    {sug.rate} AED/hr{sug.withMaterials ? ' · w/mat' : ''}
+                    <div style={{ fontSize: '10px', color: colors.ink + '77' }}>{sug.paymentType}</div>
+                  </div>
+                  <button className="btn btn-sm" style={{ background: '#8B5CF6', color: 'white', borderColor: '#8B5CF6', fontSize: '11px', padding: '4px 10px' }} onClick={() => confirmHistoricalSuggestion(sug)}>
+                    + Add
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
