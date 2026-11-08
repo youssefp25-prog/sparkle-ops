@@ -1856,22 +1856,81 @@ export default function CleaningApp() {
 
   const formatLongDate = (d) => new Date(d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
-  const exportDailyReportExcel = () => {
+  // Export the Daily Report as Excel. If dateFrom/dateTo are provided, exports
+  // every day in that range from savedDays (plus current day if included).
+  // Otherwise, exports just the current day.
+  const exportDailyReportExcel = (opts = {}) => {
+    const dateFrom = opts.dateFrom || '';
+    const dateTo = opts.dateTo || '';
     const headers = ['DATE', 'CLEANER', 'TIMINGS', 'CLIENT', 'LOCATION', 'PHONE', 'MAT.', 'HRS', 'RATE', 'TOTAL (AED)', 'PAY', 'STATUS'];
-    const dayNum = new Date(date).getDate();
-    const rows = bookingsWithCalc.map(b => [
-      dayNum, b.cleaner, b.timing, b.clientName, b.location, b.phone || '',
-      b.withMaterials ? 'Yes' : 'No', Number(b.hours), Number(b.pricePerHour),
-      Number(b.total.toFixed(2)), b.paymentType, b.paymentStatus || 'PENDING'
-    ]);
-    rows.push(['', '', '', '', '', '', 'TOTAL', Number(totalHours.toFixed(1)), '', Number(totalRevenue.toFixed(2)), '', '']);
-    const widths = [6, 12, 12, 22, 32, 16, 8, 8, 8, 14, 10, 12];
-    const ws = buildStyledSheet('DEPLOYMENT — DAILY REPORT', formatLongDate(date), headers, rows, widths, {
+
+    // Helper to compute hours + total for a booking (same formula as runtime)
+    const enrich = (b) => {
+      const hours = parseHours(b.timing);
+      const total = hours * parseFloat(b.pricePerHour || 0);
+      return { ...b, hours, total };
+    };
+
+    let title;
+    let subtitle;
+    let rows = [];
+    let totalHoursSum = 0;
+    let totalRevSum = 0;
+    let fnamePart;
+
+    if (dateFrom || dateTo) {
+      // RANGE MODE: pull from savedDays
+      const from = dateFrom || '0000-01-01';
+      const to = dateTo || '9999-12-31';
+      const dates = Object.keys(savedDays || {})
+        .filter(d => d >= from && d <= to)
+        .sort();
+      // If current day is in range and not yet saved, include current bookings too
+      if (date >= from && date <= to && !savedDays[date]) {
+        dates.push(date);
+      }
+      dates.forEach(d => {
+        const dayBookings = d === date && !savedDays[date]
+          ? bookings
+          : (savedDays[d] && savedDays[d].bookings) || [];
+        dayBookings.filter(b => b.clientName || b.location).forEach(b => {
+          const e = enrich(b);
+          rows.push([
+            d, e.cleaner, e.timing, e.clientName, e.location, e.phone || '',
+            e.withMaterials ? 'Yes' : 'No', Number(e.hours), Number(e.pricePerHour),
+            Number(e.total.toFixed(2)), e.paymentType, e.paymentStatus || 'PENDING'
+          ]);
+          totalHoursSum += e.hours;
+          totalRevSum += e.total;
+        });
+      });
+      title = 'DAILY REPORTS — DATE RANGE';
+      subtitle = `${from === '0000-01-01' ? 'start' : from} → ${to === '9999-12-31' ? 'today' : to} · ${rows.length} jobs · ${dates.length} day${dates.length !== 1 ? 's' : ''}`;
+      fnamePart = `daily_reports_${dateFrom || 'start'}_to_${dateTo || 'today'}`;
+    } else {
+      // SINGLE DAY MODE: current date only
+      bookingsWithCalc.forEach(b => {
+        rows.push([
+          date, b.cleaner, b.timing, b.clientName, b.location, b.phone || '',
+          b.withMaterials ? 'Yes' : 'No', Number(b.hours), Number(b.pricePerHour),
+          Number(b.total.toFixed(2)), b.paymentType, b.paymentStatus || 'PENDING'
+        ]);
+      });
+      totalHoursSum = totalHours;
+      totalRevSum = totalRevenue;
+      title = 'DEPLOYMENT — DAILY REPORT';
+      subtitle = formatLongDate(date);
+      fnamePart = `daily_report_${date}`;
+    }
+
+    rows.push(['', '', '', '', '', '', 'TOTAL', Number(totalHoursSum.toFixed(1)), '', Number(totalRevSum.toFixed(2)), '', '']);
+    const widths = [12, 12, 12, 22, 32, 16, 8, 8, 8, 14, 10, 12];
+    const ws = buildStyledSheet(title, subtitle, headers, rows, widths, {
       totalRow: true, statusCol: 11, materialsCol: 6, priceCol: 9
     });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Daily Report');
-    XLSX.writeFile(wb, `daily_report_${date}.xlsx`);
+    XLSX.writeFile(wb, `${fnamePart}.xlsx`);
     showStatus('✓ Excel downloaded');
   };
 
@@ -1954,26 +2013,83 @@ export default function CleaningApp() {
     showStatus('✓ Excel downloaded');
   };
 
-  const exportPendingExcel = () => {
-    const pending = allBookingsWithDate.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED' && b.total > 0);
+  // Export pending or paid payments as Excel. Accepts optional filter options
+  // so the Pending tab can respect the user's date range + mode choice.
+  // opts: { mode: 'outstanding'|'paid', dateFrom, dateTo, clientFilter }
+  const exportPendingExcel = (opts = {}) => {
+    const mode = opts.mode || 'outstanding';
+    const dateFrom = opts.dateFrom || '';
+    const dateTo = opts.dateTo || '';
+    const clientFilter = (opts.clientFilter || '').trim().toLowerCase();
+    const normClient = (s) => (s || '').trim().toLowerCase();
+
+    // Choose the base set based on mode
+    let list;
+    if (mode === 'paid') {
+      list = allBookingsWithDate.filter(b => b.paymentStatus === 'PAID' && b.total > 0);
+    } else {
+      list = allBookingsWithDate.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED' && b.total > 0);
+    }
+    // For Paid mode, the date range filters by paidDate (fallback to service date)
+    // For Outstanding mode, filters by service date
+    list = list.filter(b => {
+      if (clientFilter && normClient(b.clientName) !== clientFilter) return false;
+      const d = mode === 'paid' ? (b.paidDate || b.date) : b.date;
+      if (dateFrom && d < dateFrom) return false;
+      if (dateTo && d > dateTo) return false;
+      return true;
+    });
+
+    // Sort newest first
+    list.sort((a, b) => {
+      const aKey = mode === 'paid' ? (a.paidDate || a.date) : a.date;
+      const bKey = mode === 'paid' ? (b.paidDate || b.date) : b.date;
+      return bKey.localeCompare(aKey);
+    });
+
     const today = new Date().setHours(0, 0, 0, 0);
-    const headers = ['DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'HRS', 'AMOUNT (AED)', 'PAY', 'DAYS OVERDUE'];
-    const rows = pending.map(b => {
+    const headers = mode === 'paid'
+      ? ['PAID ON', 'SERVICE DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'HRS', 'AMOUNT (AED)', 'METHOD']
+      : ['DATE', 'CLIENT', 'PHONE', 'LOCATION', 'CLEANER', 'TIMING', 'HRS', 'AMOUNT (AED)', 'PAY', 'DAYS OVERDUE'];
+    const rows = list.map(b => {
+      if (mode === 'paid') {
+        return [
+          b.paidDate || b.date, b.date,
+          b.clientName, b.phone || '', b.location, b.cleaner, b.timing,
+          Number(b.hours), Number(b.total.toFixed(2)), b.paymentType || 'ONLINE',
+        ];
+      }
       const overdue = Math.floor((today - new Date(b.date).setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24));
       return [
         b.date, b.clientName, b.phone || '', b.location, b.cleaner, b.timing,
         Number(b.hours), Number(b.total.toFixed(2)), b.paymentType, overdue > 0 ? overdue : 0
       ];
     });
-    const totalAmount = pending.reduce((s, b) => s + b.total, 0);
-    rows.push(['', '', '', '', '', '', 'TOTAL OWED', Number(totalAmount.toFixed(2)), '', '']);
-    const widths = [12, 22, 18, 32, 14, 12, 8, 14, 10, 14];
-    const ws = buildStyledSheet('SPARKLE OPERATIONS — PENDING PAYMENTS', `${pending.length} unpaid jobs · ${totalAmount.toFixed(2)} AED outstanding`, headers, rows, widths, {
-      totalRow: true, priceCol: 7
+    const totalAmount = list.reduce((s, b) => s + b.total, 0);
+    if (mode === 'paid') {
+      rows.push(['', '', '', '', '', '', '', 'TOTAL', Number(totalAmount.toFixed(2)), '']);
+    } else {
+      rows.push(['', '', '', '', '', '', 'TOTAL OWED', Number(totalAmount.toFixed(2)), '', '']);
+    }
+
+    const widths = mode === 'paid'
+      ? [12, 12, 22, 18, 32, 14, 12, 8, 14, 10]
+      : [12, 22, 18, 32, 14, 12, 8, 14, 10, 14];
+
+    // Build a descriptive subtitle from the applied filters
+    const parts = [`${list.length} ${mode === 'paid' ? 'paid payments' : 'unpaid jobs'}`, `${totalAmount.toFixed(2)} AED`];
+    if (dateFrom || dateTo) parts.push(`${dateFrom || 'start'} → ${dateTo || 'today'}`);
+    if (opts.clientFilter) parts.push(`client: ${opts.clientFilter}`);
+
+    const title = mode === 'paid' ? 'SPARKLE OPERATIONS — PAID PAYMENTS' : 'SPARKLE OPERATIONS — PENDING PAYMENTS';
+    const ws = buildStyledSheet(title, parts.join(' · '), headers, rows, widths, {
+      totalRow: true, priceCol: mode === 'paid' ? 8 : 7
     });
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Pending Payments');
-    XLSX.writeFile(wb, `pending_payments_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, mode === 'paid' ? 'Paid Payments' : 'Pending Payments');
+    const fnameMode = mode === 'paid' ? 'paid' : 'pending';
+    const range = (dateFrom || dateTo) ? `_${dateFrom || 'start'}_to_${dateTo || 'today'}` : '';
+    XLSX.writeFile(wb, `${fnameMode}_payments${range}_${new Date().toISOString().split('T')[0]}.xlsx`);
     showStatus('✓ Excel downloaded');
   };
 
@@ -4237,7 +4353,18 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
               <Check size={14} /> Mark All {pending.length} Paid
             </button>
           )}
-          {pending.length > 0 && <button className="btn btn-primary" onClick={exportPendingExcel}><FileSpreadsheet size={14} /> Excel</button>}
+          {(viewMode === 'outstanding' ? pending.length > 0 : paidList.length > 0) && (
+            <button
+              className="btn btn-primary"
+              onClick={() => exportPendingExcel({
+                mode: viewMode,
+                dateFrom, dateTo, clientFilter,
+              })}
+              title={`Export ${viewMode === 'paid' ? 'paid history' : 'outstanding'} with current filters${dateFrom || dateTo ? ` (${dateFrom || 'start'} → ${dateTo || 'today'})` : ''}`}
+            >
+              <FileSpreadsheet size={14} /> Excel{(dateFrom || dateTo || clientFilter) ? ' (filtered)' : ''}
+            </button>
+          )}
           <div style={{ padding: '12px 20px', background: pending.length ? '#FEF3C7' : colors.accentLight, border: `1.5px solid ${pending.length ? colors.warning : colors.accent}`, borderRadius: '10px', textAlign: 'right' }}>
             <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>{isFiltered ? 'Filtered' : 'Outstanding'}</div>
             <div className="display-font" style={{ fontSize: '24px', fontWeight: 800, color: pending.length ? colors.warning : colors.accent }}>{totalPending.toFixed(2)} AED</div>
@@ -5822,17 +5949,40 @@ function ReportView({ bookingsWithCalc, date, formatDate, colors, totalRevenue, 
   const dayNum = new Date(date).getDate();
   const paidTotal = bookingsWithCalc.filter(b => b.paymentStatus === 'PAID').reduce((s, b) => s + b.total, 0);
   const pendingTotal = bookingsWithCalc.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED').reduce((s, b) => s + b.total, 0);
+  // Range export state — when either is set, the Excel button exports the range
+  const [rangeFrom, setRangeFrom] = React.useState('');
+  const [rangeTo, setRangeTo] = React.useState('');
+  const hasRange = !!(rangeFrom || rangeTo);
 
   return (
     <div>
-      <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+      <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Daily Report</h2>
-          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>End-of-day summary</p>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>End-of-day summary · exports current day OR a date range</p>
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Date range picker for the Excel export */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px', background: hasRange ? (colors.accentLight || '#F0F8F4') : 'white', border: `1.5px solid ${hasRange ? colors.accent : colors.border}`, borderRadius: '8px' }}>
+            <CalendarDays size={14} style={{ color: colors.ink + '99' }} />
+            <label style={{ fontSize: '11px', fontWeight: 700, color: colors.ink + '99', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Range:</label>
+            <input type="date" value={rangeFrom} onChange={e => setRangeFrom(e.target.value)} style={{ padding: '4px 6px', fontSize: '12px', border: `1px solid ${colors.border}`, borderRadius: '5px' }} />
+            <span style={{ fontSize: '12px', color: colors.ink + '77' }}>→</span>
+            <input type="date" value={rangeTo} onChange={e => setRangeTo(e.target.value)} style={{ padding: '4px 6px', fontSize: '12px', border: `1px solid ${colors.border}`, borderRadius: '5px' }} />
+            {hasRange && (
+              <button onClick={() => { setRangeFrom(''); setRangeTo(''); }} title="Clear range (export current day only)" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.ink + '99', padding: '2px' }}>
+                <X size={12} />
+              </button>
+            )}
+          </div>
           <button className="btn" onClick={exportCSV}><Download size={14} /> CSV</button>
-          <button className="btn btn-primary" onClick={exportDailyReportExcel}><FileSpreadsheet size={14} /> Excel</button>
+          <button
+            className="btn btn-primary"
+            onClick={() => exportDailyReportExcel({ dateFrom: rangeFrom, dateTo: rangeTo })}
+            title={hasRange ? `Export days from ${rangeFrom || 'start'} to ${rangeTo || 'today'}` : 'Export the current day only'}
+          >
+            <FileSpreadsheet size={14} /> Excel {hasRange ? '(range)' : ''}
+          </button>
           <button className="btn" onClick={printPage}><Printer size={14} /> Print</button>
         </div>
       </div>
