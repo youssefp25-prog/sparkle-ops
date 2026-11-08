@@ -2595,7 +2595,7 @@ export default function CleaningApp() {
         {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} smartSuggestionsOff={smartSuggestionsOff} isAdminMode={isAdminMode} isDayReadOnlyForAdmin={isDayReadOnlyForAdmin} />}
         {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} contracts={contracts} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} setDate={loadDate} formatDate={formatDate} colors={colors} printPage={printPage} />}
-        {!isAdminMode && view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
+        {!isAdminMode && view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} clients={clients} />}
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} />}
         {!isAdminMode && view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
         {!isAdminMode && view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
@@ -3932,7 +3932,7 @@ function EarningsView({ allBookings, CLEANERS, colors, exportEarningsExcel }) {
   );
 }
 
-function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookings, date, colors, formatDateShort, exportPendingExcel, clientCredits, saveClientCredits }) {
+function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookings, date, colors, formatDateShort, exportPendingExcel, clientCredits, saveClientCredits, clients = [] }) {
   const [expanded, setExpanded] = useState(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [clientFilter, setClientFilter] = useState('');
@@ -3943,18 +3943,41 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
   // Payment modal state: null when closed, or { items, defaultType, defaultAmount, clientName, date }
   const [payModal, setPayModal] = useState(null);
 
-  // Build a sorted unique list of client names with outstanding bookings (for the dropdown)
+  // Build a sorted unique list of ALL clients. Merges:
+  //   1. Every client from the Clients tab (the full registered list — 306 clients)
+  //   2. Any extra names found in booking history (in case a client was booked
+  //      without being added to Clients, or spelled differently).
+  // User wants to be able to filter by ANY client, even ones who have no debt.
   const allClientsWithPending = React.useMemo(() => {
     const seen = new Set();
     const list = [];
+    // Start with the registered Clients list
+    (clients || []).forEach(c => {
+      const n = (c.name || '').trim();
+      if (!n || seen.has(n.toLowerCase())) return;
+      seen.add(n.toLowerCase());
+      list.push(n);
+    });
+    // Also include any historical booking names not in the clients list
+    allBookings.forEach(b => {
+      const n = (b.clientName || '').trim();
+      if (!n || seen.has(n.toLowerCase())) return;
+      seen.add(n.toLowerCase());
+      list.push(n);
+    });
+    return list.sort((a, b) => a.localeCompare(b));
+  }, [clients, allBookings]);
+
+  // Separate count for clients with OUTSTANDING balance (shown as a secondary stat)
+  const clientsWithDebt = React.useMemo(() => {
+    const seen = new Set();
     allBookings
       .filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED' && b.total > 0)
       .forEach(b => {
-        const n = (b.clientName || '').trim();
-        if (!n || seen.has(n)) return;
-        seen.add(n); list.push(n);
+        const n = (b.clientName || '').trim().toLowerCase();
+        if (n) seen.add(n);
       });
-    return list.sort((a, b) => a.localeCompare(b));
+    return seen.size;
   }, [allBookings]);
   const toggleExpand = (key) => {
     const next = new Set(expanded);
@@ -4329,7 +4352,7 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
             onChange={e => setClientFilter(e.target.value)}
             style={{ padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '13px', background: colors.soft + '55', outline: 'none', minWidth: '180px', maxWidth: '240px' }}
           >
-            <option value="">All clients ({allClientsWithPending.length})</option>
+            <option value="">All clients ({allClientsWithPending.length}) — {clientsWithDebt} with debt</option>
             {allClientsWithPending.map(n => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
