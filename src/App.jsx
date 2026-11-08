@@ -2594,12 +2594,12 @@ export default function CleaningApp() {
         )}
         {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} smartSuggestionsOff={smartSuggestionsOff} isAdminMode={isAdminMode} isDayReadOnlyForAdmin={isDayReadOnlyForAdmin} />}
         {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} contracts={contracts} />}
-        {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} formatDate={formatDate} colors={colors} printPage={printPage} />}
+        {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} setDate={loadDate} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {!isAdminMode && view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} />}
         {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} />}
         {!isAdminMode && view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
         {!isAdminMode && view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
-        {!isAdminMode && view === 'cleaners' && <CleanersView cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} />}
+        {!isAdminMode && view === 'cleaners' && <CleanersView cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} savedDays={savedDays} bookings={bookings} date={date} />}
         {!isAdminMode && view === 'staff-links' && <StaffLinksView allCleaners={allCleaners} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
         {!isAdminMode && view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={allCleaners} allCleaners={allCleaners} exportContractsExcel={exportContractsExcel} savedDays={savedDays} bookings={bookings} currentDate={date} />}
         {!isAdminMode && view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
@@ -3935,10 +3935,27 @@ function EarningsView({ allBookings, CLEANERS, colors, exportEarningsExcel }) {
 function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookings, date, colors, formatDateShort, exportPendingExcel, clientCredits, saveClientCredits }) {
   const [expanded, setExpanded] = useState(new Set());
   const [searchQuery, setSearchQuery] = useState('');
+  const [clientFilter, setClientFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  // Toggle between Outstanding (unpaid) and Paid (historical) views
+  const [viewMode, setViewMode] = useState('outstanding'); // 'outstanding' | 'paid'
   // Payment modal state: null when closed, or { items, defaultType, defaultAmount, clientName, date }
   const [payModal, setPayModal] = useState(null);
+
+  // Build a sorted unique list of client names with outstanding bookings (for the dropdown)
+  const allClientsWithPending = React.useMemo(() => {
+    const seen = new Set();
+    const list = [];
+    allBookings
+      .filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED' && b.total > 0)
+      .forEach(b => {
+        const n = (b.clientName || '').trim();
+        if (!n || seen.has(n)) return;
+        seen.add(n); list.push(n);
+      });
+    return list.sort((a, b) => a.localeCompare(b));
+  }, [allBookings]);
   const toggleExpand = (key) => {
     const next = new Set(expanded);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -3949,9 +3966,11 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
   const allPending = allBookings.filter(b => b.paymentStatus !== 'PAID' && b.paymentStatus !== 'CANCELLED' && b.total > 0);
   const allPendingTotal = allPending.reduce((s, b) => s + b.total, 0);
 
-  // Apply filters (search text + date range)
+  // Apply filters (search text + client dropdown + date range)
   const q = searchQuery.trim().toLowerCase();
+  const normClient = (s) => (s || '').trim().toLowerCase();
   const pending = allPending.filter(b => {
+    if (clientFilter && normClient(b.clientName) !== normClient(clientFilter)) return false;
     if (dateFrom && b.date < dateFrom) return false;
     if (dateTo && b.date > dateTo) return false;
     if (q) {
@@ -3961,8 +3980,8 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
     return true;
   });
   const totalPending = pending.reduce((s, b) => s + b.total, 0);
-  const isFiltered = q.length > 0 || dateFrom.length > 0 || dateTo.length > 0;
-  const clearFilters = () => { setSearchQuery(''); setDateFrom(''); setDateTo(''); };
+  const isFiltered = q.length > 0 || clientFilter.length > 0 || dateFrom.length > 0 || dateTo.length > 0;
+  const clearFilters = () => { setSearchQuery(''); setClientFilter(''); setDateFrom(''); setDateTo(''); };
 
   // Group by client, then by day (so multiple cleaners on the same day for the same client roll up into one payment)
   const byClient = {};
@@ -4054,7 +4073,7 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
 
   // Actually apply the payment when the user confirms in the modal.
   // Now handles multi-date bulk payments by grouping items by their booking date.
-  const confirmPayment = async ({ paymentType, amountReceived, keepOriginalMethod }) => {
+  const confirmPayment = async ({ paymentType, amountReceived, keepOriginalMethod, paidDate }) => {
     if (!payModal) return;
     const ids = new Set(payModal.items.map(i => i.id));
     const dates = payModal.dates || [];
@@ -4063,9 +4082,10 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
     const overpayment = received - owed;
 
     // Build the updater. If "keep original method" is on (bulk case), don't overwrite paymentType.
+    const paidDateStr = paidDate || new Date().toISOString().split('T')[0];
     const applyUpdate = (list) => list.map(b => {
       if (!ids.has(b.id)) return b;
-      const patch = { paymentStatus: 'PAID' };
+      const patch = { paymentStatus: 'PAID', paidDate: paidDateStr };
       if (!keepOriginalMethod) patch.paymentType = paymentType;
       return { ...b, ...patch };
     });
@@ -4147,11 +4167,34 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
   const today = new Date().setHours(0, 0, 0, 0);
   const daysOverdue = (d) => Math.floor((today - new Date(d).setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24));
 
+  // ===== PAID VIEW DATA =====
+  // Collect all PAID bookings and group them for the "Paid" tab
+  const paidList = React.useMemo(() => {
+    const paid = allBookings.filter(b => b.paymentStatus === 'PAID' && b.total > 0);
+    // Apply same filter set as outstanding (client, date range, search)
+    const q2 = searchQuery.trim().toLowerCase();
+    return paid.filter(b => {
+      if (clientFilter && normClient(b.clientName) !== normClient(clientFilter)) return false;
+      if (dateFrom && (b.paidDate || b.date) < dateFrom) return false;
+      if (dateTo && (b.paidDate || b.date) > dateTo) return false;
+      if (q2) {
+        const blob = `${b.clientName || ''} ${b.cleaner || ''} ${b.location || ''} ${b.phone || ''}`.toLowerCase();
+        if (!blob.includes(q2)) return false;
+      }
+      return true;
+    }).sort((a, b) => (b.paidDate || b.date).localeCompare(a.paidDate || a.date));
+  }, [allBookings, searchQuery, clientFilter, dateFrom, dateTo]);
+  const totalPaid = paidList.reduce((s, b) => s + b.total, 0);
+  const paidCashTotal = paidList.filter(b => b.paymentType === 'CASH').reduce((s, b) => s + b.total, 0);
+  const paidOnlineTotal = paidList.filter(b => b.paymentType === 'ONLINE').reduce((s, b) => s + b.total, 0);
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Pending Payments</h2>
+          <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>
+            {viewMode === 'outstanding' ? 'Pending Payments' : 'Paid Payments History'}
+          </h2>
           <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>
             {isFiltered ? (
               <>Showing <strong>{pending.length}</strong> of {allPending.length} unpaid jobs · <strong>{groups.length}</strong> {groups.length === 1 ? 'client' : 'clients'}</>
@@ -4230,6 +4273,42 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
         );
       })()}
 
+      {/* ===== VIEW MODE TOGGLE: Outstanding vs Paid ===== */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', background: colors.soft, padding: '6px', borderRadius: '10px', border: `1px solid ${colors.border}`, display: 'inline-flex' }}>
+        <button
+          onClick={() => setViewMode('outstanding')}
+          style={{
+            padding: '8px 18px',
+            background: viewMode === 'outstanding' ? 'white' : 'transparent',
+            color: viewMode === 'outstanding' ? colors.rust : colors.ink + 'AA',
+            border: 'none',
+            borderRadius: '7px',
+            fontWeight: 700,
+            fontSize: '13px',
+            cursor: 'pointer',
+            boxShadow: viewMode === 'outstanding' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+          }}
+        >
+          🔴 Outstanding ({allPending.length})
+        </button>
+        <button
+          onClick={() => setViewMode('paid')}
+          style={{
+            padding: '8px 18px',
+            background: viewMode === 'paid' ? 'white' : 'transparent',
+            color: viewMode === 'paid' ? colors.accent : colors.ink + 'AA',
+            border: 'none',
+            borderRadius: '7px',
+            fontWeight: 700,
+            fontSize: '13px',
+            cursor: 'pointer',
+            boxShadow: viewMode === 'paid' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+          }}
+        >
+          ✅ Paid History ({allBookings.filter(b => b.paymentStatus === 'PAID' && b.total > 0).length})
+        </button>
+      </div>
+
       {/* Search & date filter bar */}
       <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', background: 'white', padding: '10px 12px', borderRadius: '10px', border: `1px solid ${colors.border}` }}>
         <div style={{ position: 'relative', flex: '1 1 260px', minWidth: '200px' }}>
@@ -4241,6 +4320,18 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
             placeholder="Search by client, cleaner, location or phone…"
             style={{ width: '100%', padding: '9px 12px 9px 36px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '13px', background: colors.soft + '55', outline: 'none' }}
           />
+        </div>
+        {/* Client dropdown — scroll through every client with outstanding balance */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '220px' }}>
+          <label style={{ fontSize: '12px', color: colors.ink + '99', fontWeight: 600, whiteSpace: 'nowrap' }}>Client:</label>
+          <select
+            value={clientFilter}
+            onChange={e => setClientFilter(e.target.value)}
+            style={{ padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '13px', background: colors.soft + '55', outline: 'none', minWidth: '180px', maxWidth: '240px' }}
+          >
+            <option value="">All clients ({allClientsWithPending.length})</option>
+            {allClientsWithPending.map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <label style={{ fontSize: '12px', color: colors.ink + '99', fontWeight: 600, whiteSpace: 'nowrap' }}>
@@ -4272,7 +4363,81 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
         )}
       </div>
 
-      {pending.length === 0 ? (
+      {/* ===== PAID HISTORY VIEW ===== */}
+      {viewMode === 'paid' ? (
+        <div style={{ background: 'white', border: `1px solid ${colors.border}`, borderRadius: '12px', overflow: 'hidden' }}>
+          {/* Summary bar at top */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0', background: colors.soft, borderBottom: `1px solid ${colors.border}` }}>
+            <div style={{ padding: '14px 18px', borderRight: `1px solid ${colors.border}` }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>Payments shown</div>
+              <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, marginTop: '2px' }}>{paidList.length}</div>
+            </div>
+            <div style={{ padding: '14px 18px', borderRight: `1px solid ${colors.border}` }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>Total collected</div>
+              <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, color: colors.accent, marginTop: '2px' }}>{totalPaid.toFixed(2)} AED</div>
+            </div>
+            <div style={{ padding: '14px 18px', borderRight: `1px solid ${colors.border}` }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>💵 Cash</div>
+              <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, color: '#D97706', marginTop: '2px' }}>{paidCashTotal.toFixed(2)}</div>
+            </div>
+            <div style={{ padding: '14px 18px' }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600 }}>💳 Online</div>
+              <div className="display-font" style={{ fontSize: '20px', fontWeight: 800, color: '#2563EB', marginTop: '2px' }}>{paidOnlineTotal.toFixed(2)}</div>
+            </div>
+          </div>
+          {paidList.length === 0 ? (
+            <div style={{ padding: '50px 20px', textAlign: 'center' }}>
+              <div style={{ fontSize: '48px', marginBottom: '8px' }}>💰</div>
+              <h3 className="display-font" style={{ margin: '0 0 6px', fontSize: '20px', fontWeight: 700 }}>No paid payments match these filters</h3>
+              <p style={{ margin: 0, fontSize: '13px', color: colors.ink + '99' }}>
+                {isFiltered ? 'Try clearing the filters above.' : 'Mark jobs as paid in the Outstanding view — they will appear here with their payment dates.'}
+              </p>
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ background: colors.soft + 'AA', borderBottom: `1.5px solid ${colors.border}` }}>
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>📅 Paid on</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Service date</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Client</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Cleaner</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Method</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paidList.map((b, idx) => {
+                    const paidD = b.paidDate ? new Date(b.paidDate + 'T12:00:00') : null;
+                    const paidLabel = paidD ? paidD.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+                    const serviceD = new Date(b.date + 'T12:00:00');
+                    const serviceLabel = serviceD.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+                    const payColor = b.paymentType === 'CASH' ? '#D97706' : '#2563EB';
+                    return (
+                      <tr key={idx} style={{ borderBottom: `1px solid ${colors.border}`, background: idx % 2 === 0 ? 'transparent' : colors.soft + '20' }}>
+                        <td className="mono" style={{ padding: '10px 14px', fontWeight: 700, color: colors.accent }}>{paidLabel}</td>
+                        <td className="mono" style={{ padding: '10px 14px', color: colors.ink + 'AA' }}>{serviceLabel}</td>
+                        <td style={{ padding: '10px 14px', fontWeight: 600 }}>
+                          {b.clientName || '—'}
+                          {b.location && <div style={{ fontSize: '10px', color: colors.ink + '77', marginTop: '2px' }}>{b.location}</div>}
+                        </td>
+                        <td style={{ padding: '10px 14px', fontWeight: 500 }}>{b.cleaner || '—'}</td>
+                        <td style={{ padding: '10px 14px' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '3px 10px', borderRadius: '99px', background: payColor + '22', color: payColor, fontSize: '11px', fontWeight: 700 }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: payColor }}></span>
+                            {b.paymentType || 'ONLINE'}
+                          </span>
+                        </td>
+                        <td className="mono" style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: colors.accent }}>{b.total.toFixed(2)} AED</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : pending.length === 0 ? (
         isFiltered ? (
           <div style={{ background: 'white', borderRadius: '12px', border: `1px dashed ${colors.border}`, padding: '50px 20px', textAlign: 'center' }}>
             <Search size={40} style={{ color: colors.ink + '55', marginBottom: '12px' }} />
@@ -4439,6 +4604,8 @@ function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
   const [paymentType, setPaymentType] = useState(modal.defaultType || 'CASH');
   const [keepOriginalMethod, setKeepOriginalMethod] = useState(isBulk && hasMixedTypes);
   const [amountReceived, setAmountReceived] = useState(String(modal.owedAmount));
+  // Date the payment was received (defaults to today, user can change)
+  const [paidDate, setPaidDate] = useState(new Date().toISOString().split('T')[0]);
   const owed = modal.owedAmount;
   const received = Number(amountReceived) || 0;
   const diff = received - owed;
@@ -4565,10 +4732,23 @@ function PaymentModal({ modal, onClose, onConfirm, currentCredit, colors }) {
           </div>
         )}
 
+        {/* Payment date — defaults to today, user can change */}
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: colors.ink + '99', fontWeight: 600, marginBottom: '6px' }}>
+            📅 Date payment received
+          </div>
+          <input
+            type="date"
+            value={paidDate}
+            onChange={e => setPaidDate(e.target.value)}
+            style={{ width: '100%', padding: '10px 12px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '13px', background: colors.soft + '55' }}
+          />
+        </div>
+
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
           <button onClick={onClose} style={{ padding: '10px 18px', border: `1px solid ${colors.border}`, background: 'white', borderRadius: '8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
           <button
-            onClick={() => onConfirm({ paymentType, amountReceived: Number(amountReceived), keepOriginalMethod })}
+            onClick={() => onConfirm({ paymentType, amountReceived: Number(amountReceived), keepOriginalMethod, paidDate })}
             className="btn btn-primary"
             style={{ padding: '10px 22px', fontSize: '13px' }}
             disabled={received <= 0}
@@ -5283,7 +5463,53 @@ function StatMiniLight({ label, value, highlight }) {
   );
 }
 
-function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPage }) {
+function DeploymentView({ byCleaner, CLEANERS, date, setDate, formatDate, colors, printPage }) {
+  // Navigate to previous/next day. Used by swipe + arrow keys + nav buttons.
+  const shiftDate = (days) => {
+    if (!setDate) return;
+    const d = new Date(date + 'T12:00:00');
+    d.setDate(d.getDate() + days);
+    setDate(d.toISOString().split('T')[0]);
+  };
+  // Swipe gesture: track touch start X and detect horizontal swipe on release.
+  const touchRef = React.useRef({ x: 0, y: 0, active: false });
+  const [swipeHint, setSwipeHint] = React.useState(0); // -1, 0, +1 for visual feedback
+  const onTouchStart = (e) => {
+    if (!e.touches || e.touches.length !== 1) return;
+    touchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, active: true };
+  };
+  const onTouchMove = (e) => {
+    if (!touchRef.current.active || !e.touches || e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - touchRef.current.x;
+    const dy = e.touches[0].clientY - touchRef.current.y;
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+      setSwipeHint(dx > 0 ? -1 : 1);
+    }
+  };
+  const onTouchEnd = (e) => {
+    if (!touchRef.current.active) return;
+    const endX = (e.changedTouches && e.changedTouches[0] && e.changedTouches[0].clientX) || touchRef.current.x;
+    const endY = (e.changedTouches && e.changedTouches[0] && e.changedTouches[0].clientY) || touchRef.current.y;
+    const dx = endX - touchRef.current.x;
+    const dy = endY - touchRef.current.y;
+    touchRef.current.active = false;
+    setSwipeHint(0);
+    // Horizontal swipe threshold: 80 px, mostly horizontal
+    if (Math.abs(dx) > 80 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      shiftDate(dx > 0 ? -1 : 1); // right swipe → previous day
+    }
+  };
+  // Keyboard arrows (desktop): Left = prev day, Right = next day
+  React.useEffect(() => {
+    const onKey = (e) => {
+      // Ignore when typing in an input or focused form element
+      if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+      if (e.key === 'ArrowLeft') shiftDate(-1);
+      else if (e.key === 'ArrowRight') shiftDate(1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [date]);
   // Build the list of cleaners to render as columns:
   //   1) First, cleaners from the known roster who have bookings today (keeps familiar order)
   //   2) Then, ANY extra cleaners found on bookings that aren't in the roster — this is the
@@ -5426,8 +5652,37 @@ function DeploymentView({ byCleaner, CLEANERS, date, formatDate, colors, printPa
           </div>
         </div>
       )}
-      <div style={{ background: 'white', padding: '0', borderRadius: '8px', border: `2px solid ${colors.ink}`, overflow: 'hidden' }}>
-        <div style={{ background: colors.headerGreen, color: 'white', textAlign: 'center', padding: '14px', fontSize: '20px', fontWeight: 700, fontFamily: 'Fraunces, serif' }}>Deployment — {formatDate(date)}</div>
+      <div
+        style={{
+          background: 'white',
+          padding: '0',
+          borderRadius: '8px',
+          border: `2px solid ${colors.ink}`,
+          overflow: 'hidden',
+          transition: 'transform 0.15s ease',
+          transform: swipeHint ? `translateX(${swipeHint * -8}px)` : 'none',
+        }}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+      >
+        <div style={{ background: colors.headerGreen, color: 'white', padding: '14px', fontSize: '20px', fontWeight: 700, fontFamily: 'Fraunces, serif', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+          <button
+            onClick={() => shiftDate(-1)}
+            title="Previous day (← arrow or swipe right)"
+            style={{ background: 'rgba(255,255,255,0.15)', border: '1.5px solid rgba(255,255,255,0.3)', color: 'white', padding: '6px 14px', borderRadius: '6px', fontSize: '16px', fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            ‹
+          </button>
+          <div style={{ textAlign: 'center', flex: 1 }}>Deployment — {formatDate(date)}</div>
+          <button
+            onClick={() => shiftDate(1)}
+            title="Next day (→ arrow or swipe left)"
+            style={{ background: 'rgba(255,255,255,0.15)', border: '1.5px solid rgba(255,255,255,0.3)', color: 'white', padding: '6px 14px', borderRadius: '6px', fontSize: '16px', fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            ›
+          </button>
+        </div>
         <table className="grid-table">
           <thead>
             <tr>
@@ -9086,10 +9341,45 @@ function PayrollCardEditRow({ label, value, setValue, onCommit, suffix, colors }
 // ============ CLEANERS VIEW ============
 // A dedicated page for managing cleaner PROFILES (contact info, availability, skills, rate).
 // Uses PAYROLL_ROSTER + CLEANERS to build the initial list, then persists overrides in `cleanerProfiles`.
-function CleanersView({ cleanerProfiles, saveCleanerProfiles, CLEANERS, PAYROLL_ROSTER, colors }) {
+function CleanersView({ cleanerProfiles, saveCleanerProfiles, CLEANERS, PAYROLL_ROSTER, colors, savedDays = {}, bookings = [], date }) {
   const [editingName, setEditingName] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [newCleanerName, setNewCleanerName] = useState('');
+  // Which month to compute absent days for (default: current month)
+  const now = new Date();
+  const [absentMonth, setAbsentMonth] = useState(now.getMonth());
+  const [absentYear, setAbsentYear] = useState(now.getFullYear());
+
+  // ===== ABSENT DAY CALCULATOR =====
+  // For a cleaner, counts the number of workdays in the chosen month where they have
+  // NO booking recorded. Saturday is treated as off for everyone (not an absence).
+  // Also excludes future days (only up to today).
+  const normalizeName = (s) => (s || '').trim().toLowerCase();
+  const countAbsentDays = (cleanerName) => {
+    const target = normalizeName(cleanerName);
+    const todayStr = new Date().toISOString().split('T')[0];
+    const daysInMonth = new Date(absentYear, absentMonth + 1, 0).getDate();
+    let absent = 0;
+    let workdays = 0;
+    let presentDays = 0;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateObj = new Date(absentYear, absentMonth, d);
+      const dateStr = dateObj.toISOString().split('T')[0];
+      // Skip future days
+      if (dateStr > todayStr) continue;
+      // Saturday (day 6) is off for all staff
+      if (dateObj.getDay() === 6) continue;
+      workdays++;
+      // Gather bookings for this day (from saved days OR current in-memory if it's today)
+      const dayBookings = dateStr === date
+        ? bookings
+        : ((savedDays[dateStr] || {}).bookings || []);
+      const hasWorked = dayBookings.some(b => normalizeName(b.cleaner) === target);
+      if (hasWorked) presentDays++;
+      else absent++;
+    }
+    return { absent, workdays, presentDays };
+  };
 
   // Build the roster: PAYROLL_ROSTER first, then any CLEANERS not already in it (deduped)
   const baseNames = [...(PAYROLL_ROSTER || []).map(p => p.name), ...(CLEANERS || [])];
@@ -9104,11 +9394,13 @@ function CleanersView({ cleanerProfiles, saveCleanerProfiles, CLEANERS, PAYROLL_
     return {
       phone: profile.phone || '',
       status: profile.status || 'Available',
-      workingDays: profile.workingDays || [true, true, true, true, true, true, true], // S M T W T F S
+      // Default working days: Sunday through Friday (Saturday off)
+      workingDays: profile.workingDays || [true, true, true, true, true, true, false],
       hoursStart: profile.hoursStart || '0:00',
       hoursEnd: profile.hoursEnd || '24:00',
       skills: profile.skills || '',
       areas: profile.areas || '',
+      notes: profile.notes || '',
       ratePerHour: profile.ratePerHour ?? 20,
       salaryPerMonth: profile.salaryPerMonth ?? (rosterEntry?.defaultSalary || 1800),
       role: profile.role || rosterEntry?.role || 'Cleaner',
@@ -9142,11 +9434,20 @@ function CleanersView({ cleanerProfiles, saveCleanerProfiles, CLEANERS, PAYROLL_
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Cleaners</h2>
-          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Availability, skills, working hours & payroll basis</p>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>Availability, skills, hours, payroll & monthly attendance (Saturdays = off)</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
-          <Plus size={14} /> Add Cleaner
-        </button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Month selector for the Absent column */}
+          <select className="select" value={absentMonth} onChange={e => setAbsentMonth(Number(e.target.value))} style={{ fontSize: '13px', padding: '6px 8px' }}>
+            {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((m, i) => <option key={m} value={i}>{m}</option>)}
+          </select>
+          <select className="select" value={absentYear} onChange={e => setAbsentYear(Number(e.target.value))} style={{ fontSize: '13px', padding: '6px 8px' }}>
+            {[now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1].map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+          <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
+            <Plus size={14} /> Add Cleaner
+          </button>
+        </div>
       </div>
 
       {showAdd && (
@@ -9171,6 +9472,8 @@ function CleanersView({ cleanerProfiles, saveCleanerProfiles, CLEANERS, PAYROLL_
                 <Th>Areas</Th>
                 <Th>Rate/hr</Th>
                 <Th>Salary/mo</Th>
+                <Th>Absent Days</Th>
+                <Th>Notes</Th>
                 <Th></Th>
               </tr>
             </thead>
@@ -9208,6 +9511,26 @@ function CleanersView({ cleanerProfiles, saveCleanerProfiles, CLEANERS, PAYROLL_
                     <Td style={{ fontSize: '11px', maxWidth: '150px' }}>{profile.areas || '—'}</Td>
                     <Td className="mono">{Number(profile.ratePerHour).toFixed(2)}</Td>
                     <Td className="mono" style={{ fontWeight: 700, color: colors.accent }}>{Number(profile.salaryPerMonth).toFixed(2)}</Td>
+                    <Td>
+                      {(() => {
+                        const stats = countAbsentDays(name);
+                        const isCurrentPeriod = absentMonth === now.getMonth() && absentYear === now.getFullYear();
+                        const absentColor = stats.absent === 0 ? colors.accent : stats.absent <= 2 ? colors.gold : colors.rust;
+                        return (
+                          <div style={{ fontSize: '12px' }}>
+                            <div style={{ fontWeight: 800, fontSize: '15px', color: absentColor }}>
+                              {stats.absent}<span style={{ fontSize: '11px', color: colors.ink + '77', fontWeight: 500 }}> / {stats.workdays}</span>
+                            </div>
+                            <div style={{ fontSize: '10px', color: colors.ink + '77' }}>
+                              {stats.presentDays} present {isCurrentPeriod ? '(so far)' : ''}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </Td>
+                    <Td style={{ fontSize: '11px', maxWidth: '180px', color: colors.ink + 'CC', fontStyle: profile.notes ? 'normal' : 'italic' }}>
+                      {profile.notes || '—'}
+                    </Td>
                     <Td>
                       <div style={{ display: 'flex', gap: '3px' }}>
                         <button className="btn btn-sm" onClick={() => setEditingName(name)} title="Edit cleaner"><Edit2 size={12} /></button>
@@ -9263,6 +9586,17 @@ function CleanerEditRow({ name, profile, onSave, onCancel, colors, dayLabels }) 
       <Td><input className="input" value={f.areas} onChange={e => setF({ ...f, areas: e.target.value })} placeholder="Reem, Khalifa City…" style={{ padding: '4px 6px', fontSize: '11px', width: '140px' }} /></Td>
       <Td><input className="input" type="number" step="0.5" value={f.ratePerHour} onChange={e => setF({ ...f, ratePerHour: Number(e.target.value) })} style={{ padding: '4px 6px', fontSize: '11px', width: '65px', fontFamily: 'monospace' }} /></Td>
       <Td><input className="input" type="number" value={f.salaryPerMonth} onChange={e => setF({ ...f, salaryPerMonth: Number(e.target.value) })} style={{ padding: '4px 6px', fontSize: '11px', width: '75px', fontFamily: 'monospace' }} /></Td>
+      <Td style={{ color: colors.ink + '77', fontSize: '10px', fontStyle: 'italic' }}>auto</Td>
+      <Td>
+        <textarea
+          className="input"
+          value={f.notes || ''}
+          onChange={e => setF({ ...f, notes: e.target.value })}
+          placeholder="Private notes about this cleaner…"
+          rows="2"
+          style={{ padding: '4px 6px', fontSize: '11px', width: '180px', resize: 'vertical' }}
+        />
+      </Td>
       <Td>
         <div style={{ display: 'flex', gap: '3px' }}>
           <button className="btn btn-primary btn-sm" onClick={() => onSave(f)} title="Save"><Check size={12} /></button>
