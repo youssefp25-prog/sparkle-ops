@@ -652,7 +652,7 @@ const detectIsAdminMode = () => {
     return false;
   } catch (e) { return false; }
 };
-const ADMIN_ALLOWED_VIEWS = ['input', 'deployment', 'cleaners', 'clients'];
+const ADMIN_ALLOWED_VIEWS = ['input', 'plan', 'deployment', 'cleaners', 'clients'];
 
 export default function CleaningApp() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -2670,11 +2670,11 @@ export default function CleaningApp() {
         </div>
         <div style={{ display: 'flex', marginTop: '16px', borderBottom: `1px solid ${colors.border}`, marginLeft: -32, marginRight: -32, paddingLeft: 32, paddingRight: 32, overflowX: 'auto' }}>
           <button className={`tab ${view === 'input' ? 'active' : ''}`} onClick={() => setView('input')}><Plus size={15} /> Bookings ({bookingsWithCalc.length})</button>
+          <button className={`tab ${view === 'plan' ? 'active' : ''}`} onClick={() => setView('plan')}>📅 Plan</button>
           <button className={`tab ${view === 'deployment' ? 'active' : ''}`} onClick={() => setView('deployment')}><Grid3x3 size={15} /> Deployment</button>
           <button className={`tab ${view === 'cleaners' ? 'active' : ''}`} onClick={() => setView('cleaners')}><Users size={15} /> Cleaners</button>
           <button className={`tab ${view === 'clients' ? 'active' : ''}`} onClick={() => setView('clients')}><BookUser size={15} /> Clients ({clients.length})</button>
           {!isAdminMode && <>
-            <button className={`tab ${view === 'plan' ? 'active' : ''}`} onClick={() => setView('plan')}>📅 Plan</button>
             <button className={`tab ${view === 'driver' ? 'active' : ''}`} onClick={() => setView('driver')}><Truck size={15} /> Driver</button>
             <button className={`tab ${view === 'pending' ? 'active' : ''}`} onClick={() => setView('pending')}><AlertCircle size={15} /> Pending</button>
             <button className={`tab ${view === 'report' ? 'active' : ''}`} onClick={() => setView('report')}><FileText size={15} /> Daily Report</button>
@@ -2710,7 +2710,7 @@ export default function CleaningApp() {
           </div>
         )}
         {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} smartSuggestionsOff={smartSuggestionsOff} isAdminMode={isAdminMode} isDayReadOnlyForAdmin={isDayReadOnlyForAdmin} />}
-        {!isAdminMode && view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} contracts={contracts} />}
+        {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} contracts={contracts} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} setDate={loadDate} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {!isAdminMode && view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} clients={clients} />}
         {!isAdminMode && view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} />}
@@ -10624,8 +10624,8 @@ function StaffLinksView({ allCleaners, cleanerProfiles, saveCleanerProfiles, com
                 <div style={{ fontSize: '11px', color: '#1E40AF', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>👤 Admin / Office Assistant</div>
                 <div className="display-font" style={{ fontSize: '20px', fontWeight: 700, marginTop: '2px' }}>Admin Access Link</div>
                 <div style={{ fontSize: '12px', color: colors.ink + '99', marginTop: '6px', lineHeight: 1.5 }}>
-                  Sees <strong>4 tabs only</strong>: Bookings, Deployment, Cleaners (view-only), Clients (view-only).
-                  <br />Cannot: see earnings, edit past bookings, delete, export, access settings, invoices, pending or payroll.
+                  Sees <strong>5 tabs only</strong>: Bookings, 📅 Plan, Deployment, Cleaners (view-only), Clients (view-only).
+                  <br />Cannot: see earnings, edit past bookings, export, access settings, invoices, pending, payroll or driver routes.
                 </div>
               </div>
             </div>
@@ -10642,7 +10642,7 @@ function StaffLinksView({ allCleaners, cleanerProfiles, saveCleanerProfiles, com
               <button
                 className="btn btn-sm"
                 onClick={() => {
-                  const msg = `Hi, here's the admin access link to the booking system:\n\n${adminUrl}\n\nBookmark this link on your phone. You'll need the app password to open it.\n\nYou can:\n- Add bookings for today & future dates\n- View the deployment schedule\n- View the cleaners list\n- View the clients list\n\nKeep this link and the password private.\n\n— ${companyInfo?.name || 'AR Cleaning Services'}`;
+                  const msg = `Hi, here's the admin access link to the booking system:\n\n${adminUrl}\n\nBookmark this link on your phone. You'll need the app password to open it.\n\nYou can:\n- Add bookings for today & future dates\n- See the Plan tab (suggested clients to call)\n- View the deployment schedule\n- View the cleaners list\n- View the clients list\n\nKeep this link and the password private.\n\n— ${companyInfo?.name || 'AR Cleaning Services'}`;
                   window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
                 }}
                 style={{ fontSize: '12px', background: '#25D366', color: 'white', borderColor: '#25D366' }}
