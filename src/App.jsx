@@ -3030,7 +3030,11 @@ Thank you for choosing us!
                         >
                           <MessageCircle size={14} />
                         </button>
-                        {!isDayReadOnlyForAdmin && !isAdminMode && <button className="btn btn-danger btn-sm" onClick={() => removeBooking(b.id)} style={{ padding: '6px 8px' }}><Trash2 size={14} /></button>}
+                        {/* Trash button: visible whenever the day is editable.
+                            Admin CAN delete bookings on today/future dates — this lets
+                            them correct typos while entering. Still hidden on past dates
+                            where isDayReadOnlyForAdmin is true. */}
+                        {!isDayReadOnlyForAdmin && <button className="btn btn-danger btn-sm" onClick={() => removeBooking(b.id)} style={{ padding: '6px 8px' }}><Trash2 size={14} /></button>}
                       </div>
                     </Td>
                   </tr>
