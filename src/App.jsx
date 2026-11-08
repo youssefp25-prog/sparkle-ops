@@ -652,7 +652,7 @@ const detectIsAdminMode = () => {
     return false;
   } catch (e) { return false; }
 };
-const ADMIN_ALLOWED_VIEWS = ['input', 'plan', 'deployment', 'driver'];
+const ADMIN_ALLOWED_VIEWS = ['input', 'deployment', 'cleaners', 'clients'];
 
 export default function CleaningApp() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -1285,6 +1285,7 @@ export default function CleaningApp() {
   // are visible from every laptop/device. Falls back silently to localStorage if the
   // table doesn't exist or the network is down — the UI never breaks.
   const saveCleanerProfiles = async (next) => {
+    if (isAdminMode) { alert('Admin cannot modify cleaner profiles.'); return; }
     setCleanerProfiles(next);
     try { localStorage.setItem('sparkle_cleaner_profiles', JSON.stringify(next)); } catch (e) {}
     setCloudStatus('syncing');
@@ -2669,14 +2670,14 @@ export default function CleaningApp() {
         </div>
         <div style={{ display: 'flex', marginTop: '16px', borderBottom: `1px solid ${colors.border}`, marginLeft: -32, marginRight: -32, paddingLeft: 32, paddingRight: 32, overflowX: 'auto' }}>
           <button className={`tab ${view === 'input' ? 'active' : ''}`} onClick={() => setView('input')}><Plus size={15} /> Bookings ({bookingsWithCalc.length})</button>
-          <button className={`tab ${view === 'plan' ? 'active' : ''}`} onClick={() => setView('plan')}>📅 Plan</button>
           <button className={`tab ${view === 'deployment' ? 'active' : ''}`} onClick={() => setView('deployment')}><Grid3x3 size={15} /> Deployment</button>
-          <button className={`tab ${view === 'driver' ? 'active' : ''}`} onClick={() => setView('driver')}><Truck size={15} /> Driver</button>
+          <button className={`tab ${view === 'cleaners' ? 'active' : ''}`} onClick={() => setView('cleaners')}><Users size={15} /> Cleaners</button>
+          <button className={`tab ${view === 'clients' ? 'active' : ''}`} onClick={() => setView('clients')}><BookUser size={15} /> Clients ({clients.length})</button>
           {!isAdminMode && <>
+            <button className={`tab ${view === 'plan' ? 'active' : ''}`} onClick={() => setView('plan')}>📅 Plan</button>
+            <button className={`tab ${view === 'driver' ? 'active' : ''}`} onClick={() => setView('driver')}><Truck size={15} /> Driver</button>
             <button className={`tab ${view === 'pending' ? 'active' : ''}`} onClick={() => setView('pending')}><AlertCircle size={15} /> Pending</button>
             <button className={`tab ${view === 'report' ? 'active' : ''}`} onClick={() => setView('report')}><FileText size={15} /> Daily Report</button>
-            <button className={`tab ${view === 'clients' ? 'active' : ''}`} onClick={() => setView('clients')}><BookUser size={15} /> Clients ({clients.length})</button>
-            <button className={`tab ${view === 'cleaners' ? 'active' : ''}`} onClick={() => setView('cleaners')}><Users size={15} /> Cleaners</button>
             <button className={`tab ${view === 'staff-links' ? 'active' : ''}`} onClick={() => setView('staff-links')}><Phone size={15} /> Staff Links</button>
             <button className={`tab ${view === 'contracts' ? 'active' : ''}`} onClick={() => setView('contracts')}><Repeat size={15} /> Contracts ({contracts.filter(c=>c.active).length})</button>
             <button className={`tab ${view === 'earnings' ? 'active' : ''}`} onClick={() => setView('earnings')}><TrendingUp size={15} /> Earnings</button>
@@ -2709,13 +2710,13 @@ export default function CleaningApp() {
           </div>
         )}
         {view === 'input' && <InputView bookings={bookings} setBookings={setBookings} bookingsWithCalc={bookingsWithCalc} updateBooking={updateBooking} addBooking={addBooking} removeBooking={removeBooking} clearDay={clearDay} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} activeCleaners={activeCleaners} allCleaners={allCleaners} clients={clients} saveClients={saveClients} setClientPickerFor={setClientPickerFor} setBookingPinFor={setBookingPinFor} contracts={contracts} generateFromContracts={generateFromContracts} exportEverythingExcel={exportEverythingExcel} companyInfo={companyInfo} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} smartSuggestions={smartSuggestions} smartBuilderDismissed={smartBuilderDismissed} setSmartBuilderDismissed={setSmartBuilderDismissed} smartSuggestionsOff={smartSuggestionsOff} isAdminMode={isAdminMode} isDayReadOnlyForAdmin={isDayReadOnlyForAdmin} />}
-        {view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} contracts={contracts} />}
+        {!isAdminMode && view === 'plan' && <BookingPlanView recurringClients={recurringClients} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} clients={clients} companyInfo={companyInfo} allCleaners={allCleaners} setView={setView} setDate={setDate} showStatus={showStatus} scheduledBookings={scheduledBookings} saveScheduledBookings={saveScheduledBookings} contracts={contracts} />}
         {view === 'deployment' && <DeploymentView byCleaner={byCleaner} CLEANERS={allCleaners} date={date} setDate={loadDate} formatDate={formatDate} colors={colors} printPage={printPage} />}
         {!isAdminMode && view === 'pending' && <PendingView allBookings={allBookingsWithDate} savedDays={savedDays} setSavedDays={setSavedDays} bookings={bookings} setBookings={setBookings} date={date} colors={colors} formatDateShort={formatDateShort} exportPendingExcel={exportPendingExcel} clientCredits={clientCredits} saveClientCredits={saveClientCredits} clients={clients} />}
-        {view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} />}
+        {!isAdminMode && view === 'driver' && <DriverView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} cleanerHomes={cleanerHomes} saveCleanerHomes={saveCleanerHomes} officeAddress={officeAddress} saveOfficeAddress={saveOfficeAddress} CLEANER_COLORS={CLEANER_COLORS} CLEANERS={allCleaners} updateBooking={updateBooking} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} />}
         {!isAdminMode && view === 'report' && <ReportView bookingsWithCalc={bookingsWithCalc} date={date} formatDate={formatDate} colors={colors} totalRevenue={totalRevenue} totalHours={totalHours} cashTotal={cashTotal} onlineTotal={onlineTotal} printPage={printPage} exportCSV={exportCSV} exportDailyReportExcel={exportDailyReportExcel} />}
-        {!isAdminMode && view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} />}
-        {!isAdminMode && view === 'cleaners' && <CleanersView cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} savedDays={savedDays} bookings={bookings} date={date} />}
+        {view === 'clients' && <ClientsView clients={clients} saveClients={saveClients} colors={colors} allBookings={allBookingsWithDate} exportClientsExcel={exportClientsExcel} companyInfo={companyInfo} isAdminMode={isAdminMode} />}
+        {view === 'cleaners' && <CleanersView cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} CLEANERS={CLEANERS} PAYROLL_ROSTER={PAYROLL_ROSTER} colors={colors} savedDays={savedDays} bookings={bookings} date={date} isAdminMode={isAdminMode} />}
         {!isAdminMode && view === 'staff-links' && <StaffLinksView allCleaners={allCleaners} cleanerProfiles={cleanerProfiles} saveCleanerProfiles={saveCleanerProfiles} companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />}
         {!isAdminMode && view === 'contracts' && <ContractsView contracts={contracts} saveContracts={saveContracts} clients={clients} colors={colors} CLEANERS={allCleaners} allCleaners={allCleaners} exportContractsExcel={exportContractsExcel} savedDays={savedDays} bookings={bookings} currentDate={date} />}
         {!isAdminMode && view === 'earnings' && <EarningsView allBookings={allBookingsWithDate} CLEANERS={allCleaners} colors={colors} exportEarningsExcel={exportEarningsExcel} />}
@@ -3331,7 +3332,7 @@ function FastBookingModal({ clients, saveClients, allCleaners, addBooking, booki
   );
 }
 
-function ClientsView({ clients, saveClients, colors, allBookings, exportClientsExcel, companyInfo }) {
+function ClientsView({ clients, saveClients, colors, allBookings, exportClientsExcel, companyInfo, isAdminMode }) {
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState('');
   const [showPinPicker, setShowPinPicker] = useState(false);
@@ -3372,8 +3373,8 @@ function ClientsView({ clients, saveClients, colors, allBookings, exportClientsE
             <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: colors.ink + '66' }} />
             <input className="input" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} style={{ paddingLeft: '32px', width: '200px' }} />
           </div>
-          {clients.length > 0 && <button className="btn" onClick={exportClientsExcel}><FileSpreadsheet size={14} /> Excel</button>}
-          <button className="btn btn-primary" onClick={startNew}><Plus size={14} /> New Client</button>
+          {clients.length > 0 && !isAdminMode && <button className="btn" onClick={exportClientsExcel}><FileSpreadsheet size={14} /> Excel</button>}
+          {!isAdminMode && <button className="btn btn-primary" onClick={startNew}><Plus size={14} /> New Client</button>}
         </div>
       </div>
 
@@ -3399,8 +3400,8 @@ function ClientsView({ clients, saveClients, colors, allBookings, exportClientsE
                       <MessageCircle size={12} />
                     </button>
                   )}
-                  <button className="btn btn-sm" onClick={() => startEdit(c)} style={{ padding: '4px 8px' }}><Edit2 size={12} /></button>
-                  <button className="btn btn-danger btn-sm" onClick={() => remove(c.id)} style={{ padding: '4px 8px' }}><Trash2 size={12} /></button>
+                  {!isAdminMode && <button className="btn btn-sm" onClick={() => startEdit(c)} style={{ padding: '4px 8px' }}><Edit2 size={12} /></button>}
+                  {!isAdminMode && <button className="btn btn-danger btn-sm" onClick={() => remove(c.id)} style={{ padding: '4px 8px' }}><Trash2 size={12} /></button>}
                 </div>
               </div>
               {c.phone && <div style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}><Phone size={12} /> <span className="mono">{c.phone}</span></div>}
@@ -9514,7 +9515,7 @@ function PayrollCardEditRow({ label, value, setValue, onCommit, suffix, colors }
 // ============ CLEANERS VIEW ============
 // A dedicated page for managing cleaner PROFILES (contact info, availability, skills, rate).
 // Uses PAYROLL_ROSTER + CLEANERS to build the initial list, then persists overrides in `cleanerProfiles`.
-function CleanersView({ cleanerProfiles, saveCleanerProfiles, CLEANERS, PAYROLL_ROSTER, colors, savedDays = {}, bookings = [], date }) {
+function CleanersView({ cleanerProfiles, saveCleanerProfiles, CLEANERS, PAYROLL_ROSTER, colors, savedDays = {}, bookings = [], date, isAdminMode }) {
   const [editingName, setEditingName] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [newCleanerName, setNewCleanerName] = useState('');
@@ -9617,9 +9618,9 @@ function CleanersView({ cleanerProfiles, saveCleanerProfiles, CLEANERS, PAYROLL_
           <select className="select" value={absentYear} onChange={e => setAbsentYear(Number(e.target.value))} style={{ fontSize: '13px', padding: '6px 8px' }}>
             {[now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1].map(y => <option key={y} value={y}>{y}</option>)}
           </select>
-          <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
+          {!isAdminMode && <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
             <Plus size={14} /> Add Cleaner
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -9705,12 +9706,14 @@ function CleanersView({ cleanerProfiles, saveCleanerProfiles, CLEANERS, PAYROLL_
                       {profile.notes || '—'}
                     </Td>
                     <Td>
-                      <div style={{ display: 'flex', gap: '3px' }}>
-                        <button className="btn btn-sm" onClick={() => setEditingName(name)} title="Edit cleaner"><Edit2 size={12} /></button>
-                        {!(PAYROLL_ROSTER || []).find(p => p.name === name) && !(CLEANERS || []).includes(name) && (
-                          <button className="btn btn-sm btn-danger" onClick={() => deleteCleaner(name)} title="Remove profile"><Trash2 size={12} /></button>
-                        )}
-                      </div>
+                      {!isAdminMode && (
+                        <div style={{ display: 'flex', gap: '3px' }}>
+                          <button className="btn btn-sm" onClick={() => setEditingName(name)} title="Edit cleaner"><Edit2 size={12} /></button>
+                          {!(PAYROLL_ROSTER || []).find(p => p.name === name) && !(CLEANERS || []).includes(name) && (
+                            <button className="btn btn-sm btn-danger" onClick={() => deleteCleaner(name)} title="Remove profile"><Trash2 size={12} /></button>
+                          )}
+                        </div>
+                      )}
                     </Td>
                   </tr>
                 );
@@ -10605,6 +10608,50 @@ function StaffLinksView({ allCleaners, cleanerProfiles, saveCleanerProfiles, com
           <div style={{ fontSize: '13px', color: colors.ink + '77' }}>No link generated yet. Click above to create one.</div>
         )}
       </div>
+
+      {/* Admin link card — admin URL that grants restricted access to 4 tabs */}
+      {(() => {
+        const adminUrl = `${baseUrl}?admin`;
+        const adminCopyKey = 'admin';
+        return (
+          <div style={{ background: 'white', border: `1.5px solid #3B82F6`, borderRadius: '12px', padding: '18px', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
+              <div>
+                <div style={{ fontSize: '11px', color: '#1E40AF', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>👤 Admin / Office Assistant</div>
+                <div className="display-font" style={{ fontSize: '20px', fontWeight: 700, marginTop: '2px' }}>Admin Access Link</div>
+                <div style={{ fontSize: '12px', color: colors.ink + '99', marginTop: '6px', lineHeight: 1.5 }}>
+                  Sees <strong>4 tabs only</strong>: Bookings, Deployment, Cleaners (view-only), Clients (view-only).
+                  <br />Cannot: see earnings, edit past bookings, delete, export, access settings, invoices, pending or payroll.
+                </div>
+              </div>
+            </div>
+            <div className="mono" style={{ padding: '10px 12px', background: colors.soft, borderRadius: '8px', fontSize: '12px', marginBottom: '10px', wordBreak: 'break-all', border: `1px solid ${colors.border}` }}>
+              {adminUrl}
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              <button className="btn btn-sm" onClick={() => copyLink(adminUrl, adminCopyKey)} style={{ fontSize: '12px' }}>
+                {copiedFor === adminCopyKey ? '✓ Copied!' : '📋 Copy'}
+              </button>
+              <button className="btn btn-sm" onClick={() => openPreview(adminUrl)} style={{ fontSize: '12px' }}>
+                👁 Preview
+              </button>
+              <button
+                className="btn btn-sm"
+                onClick={() => {
+                  const msg = `Hi, here's the admin access link to the booking system:\n\n${adminUrl}\n\nBookmark this link on your phone. You'll need the app password to open it.\n\nYou can:\n- Add bookings for today & future dates\n- View the deployment schedule\n- View the cleaners list\n- View the clients list\n\nKeep this link and the password private.\n\n— ${companyInfo?.name || 'AR Cleaning Services'}`;
+                  window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
+                }}
+                style={{ fontSize: '12px', background: '#25D366', color: 'white', borderColor: '#25D366' }}
+              >
+                <MessageCircle size={12} /> Send via WhatsApp
+              </button>
+            </div>
+            <div style={{ marginTop: '10px', padding: '8px 10px', background: '#DBEAFE', border: '1px solid #93C5FD', borderRadius: '6px', fontSize: '11px', color: '#1E40AF' }}>
+              💡 Admin still needs the app <strong>password</strong> to log in. Share both the link and password separately for safety.
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Per-cleaner cards */}
       <div style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.08em', color: colors.ink + '77', fontWeight: 700, margin: '20px 0 8px' }}>
