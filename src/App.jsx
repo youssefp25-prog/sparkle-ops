@@ -4429,7 +4429,7 @@ function PendingView({ allBookings, savedDays, setSavedDays, bookings, setBookin
       })()}
 
       {/* ===== VIEW MODE TOGGLE: Outstanding vs Paid ===== */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', background: colors.soft, padding: '6px', borderRadius: '10px', border: `1px solid ${colors.border}`, display: 'inline-flex' }}>
+      <div style={{ display: 'inline-flex', gap: '8px', marginBottom: '16px', background: colors.soft, padding: '6px', borderRadius: '10px', border: `1px solid ${colors.border}` }}>
         <button
           onClick={() => setViewMode('outstanding')}
           style={{
@@ -6172,95 +6172,86 @@ function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, 
   //   RETURN   = return cleaner home / to office at end of day (one per cleaner)
   // This matches the user's workflow: she wants to see "collect Zainab from Sudhi Dental"
   // as its own line, not just as a subtle "From:" note on the next drop.
-  const runEvents = [];
-  const allCleanersWithJobs = Object.keys(cleanerBookings).filter(c => cleanerBookings[c].length > 0);
-  allCleanersWithJobs.forEach(cleaner => {
-    const jobs = cleanerBookings[cleaner].sort((a, b) => parseStartTime(a.timing) - parseStartTime(b.timing));
-    if (jobs.length === 0) return;
-    jobs.forEach((job, idx) => {
-      const jobStart = parseStartTime(job.timing);
-      const prevJob = idx > 0 ? jobs[idx - 1] : null;
-      const prevJobEnd = prevJob ? parseEndTime(prevJob.timing) : null;
+  // ========================================================================
+  // SIMPLIFIED DRIVER SCHEDULE — drops only, grouped by time slot,
+  // nearest-first within each slot.
+  //
+  // Rules (per Yousef, Nov 2026):
+  //   1. No pickup / collect / return rows. Just drops.
+  //   2. Group drops by appointment start time (8:00, 8:30, 9:00…).
+  //   3. Within a time slot: driver visits the nearest client first,
+  //      then the next-nearest from there, and so on.
+  //   4. The first drop of the day is nearest to OFFICE.
+  //   5. Car holds 4 cleaners — flag time slots that exceed it.
+  // ========================================================================
+  const CAR_CAPACITY = 4;
 
-      // === Step 1: Pickup or Collect BEFORE this drop ===
-      if (idx === 0) {
-        // First job of the day: PICKUP from home or office
-        const useHome = job.pickupType === 'HOME';
-        runEvents.push({
-          type: 'PICKUP',
-          time: jobStart - 0.001, // just before the drop at same time
-          timeLabel: job.timing.split('-')[0] || job.timing,
-          cleaner,
-          fromLabel: useHome ? `${cleaner}'s home` : 'Office',
-          fromAddress: useHome ? (cleanerHomes[cleaner]?.address || `${cleaner}'s home address (not set)`) : officeAddress.address,
-          fromLat: useHome ? cleanerHomes[cleaner]?.lat : officeAddress?.lat,
-          fromLng: useHome ? cleanerHomes[cleaner]?.lng : officeAddress?.lng,
-          bookingId: job.id,
-          lat: useHome ? cleanerHomes[cleaner]?.lat : officeAddress?.lat,
-          lng: useHome ? cleanerHomes[cleaner]?.lng : officeAddress?.lng,
-          location: useHome ? (cleanerHomes[cleaner]?.address || 'Home') : officeAddress.address,
-          phone: '',
-        });
-      } else {
-        // Subsequent job: COLLECT from the previous job's location
-        runEvents.push({
-          type: 'COLLECT',
-          time: prevJobEnd, // collect at end of previous job
-          timeLabel: prevJob.timing.split('-')[1] || '',
-          cleaner,
-          fromClient: prevJob.clientName,
-          fromLabel: `${cleaner} from ${prevJob.clientName}`,
-          fromAddress: prevJob.location,
-          fromLat: prevJob.lat,
-          fromLng: prevJob.lng,
-          bookingId: prevJob.id,
-          lat: prevJob.lat,
-          lng: prevJob.lng,
-          location: prevJob.location,
-          phone: prevJob.phone,
-        });
-      }
+  // Collect all drops (one per booking). Each is a sortable event.
+  const allDrops = sorted.map(b => ({
+    time: parseStartTime(b.timing),
+    timeLabel: b.timing.split('-')[0] || b.timing,
+    endTimeLabel: b.timing.split('-')[1] || '',
+    timing: b.timing,
+    cleaner: b.cleaner,
+    clientName: b.clientName,
+    location: b.location,
+    phone: b.phone,
+    bookingId: b.id,
+    lat: b.lat,
+    lng: b.lng,
+  }));
 
-      // === Step 2: DROP at this job location ===
-      runEvents.push({
-        type: 'DROP',
-        time: jobStart,
-        timeLabel: job.timing.split('-')[0] || job.timing,
-        cleaner,
-        clientName: job.clientName,
-        location: job.location,
-        phone: job.phone,
-        originLabel: idx === 0
-          ? (job.pickupType === 'HOME' ? `${cleaner}'s home` : 'Office')
-          : `${cleaner} from ${jobs[idx - 1].clientName}`,
-        originAddress: idx === 0
-          ? (job.pickupType === 'HOME' ? (cleanerHomes[cleaner]?.address || '') : officeAddress.address)
-          : jobs[idx - 1].location,
-        bookingId: job.id,
-        lat: job.lat,
-        lng: job.lng,
-      });
-    });
-
-    // === Step 3: End-of-day RETURN pickup from last job ===
-    const lastJob = jobs[jobs.length - 1];
-    runEvents.push({
-      type: 'RETURN',
-      time: parseEndTime(lastJob.timing) + 0.001,
-      timeLabel: lastJob.timing.split('-')[1] || '',
-      cleaner,
-      fromClient: lastJob.clientName,
-      fromLabel: `${cleaner} from ${lastJob.clientName}`,
-      fromAddress: lastJob.location,
-      clientName: lastJob.clientName, // for backwards compat with existing UI
-      location: lastJob.location,
-      phone: lastJob.phone,
-      bookingId: lastJob.id,
-      lat: lastJob.lat,
-      lng: lastJob.lng,
-    });
+  // Group by time-slot (rounded to the booking-start hour/half-hour)
+  const slotsMap = {};
+  allDrops.forEach(d => {
+    const key = d.timeLabel; // '8', '8:30', '9' etc. — exact as user booked it
+    if (!slotsMap[key]) slotsMap[key] = { timeLabel: key, timeValue: d.time, drops: [] };
+    slotsMap[key].drops.push(d);
   });
-  runEvents.sort((a, b) => a.time - b.time);
+  const timeSlots = Object.values(slotsMap).sort((a, b) => a.timeValue - b.timeValue);
+
+  // Order drops inside each slot by nearest-neighbour, starting from
+  // "current position" (office for slot 1, or the last drop of the previous slot).
+  let currentLat = officeAddress?.lat ?? null;
+  let currentLng = officeAddress?.lng ?? null;
+  let currentLabel = 'office';
+  let dropCounter = 0;
+
+  const orderedSlots = timeSlots.map(slot => {
+    const remaining = [...slot.drops];
+    const ordered = [];
+    while (remaining.length > 0) {
+      // Find the nearest to current position among remaining drops
+      let bestIdx = 0;
+      let bestDist = Infinity;
+      remaining.forEach((d, i) => {
+        if (d.lat != null && d.lng != null && currentLat != null && currentLng != null) {
+          const dist = haversineKm(currentLat, currentLng, d.lat, d.lng);
+          if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+        } else if (bestDist === Infinity) {
+          // If no GPS on anyone, just keep whatever order they came in
+          bestIdx = 0;
+        }
+      });
+      const chosen = remaining.splice(bestIdx, 1)[0];
+      dropCounter++;
+      chosen.order = dropCounter;
+      chosen.distanceFromPrev = (currentLat != null && chosen.lat != null)
+        ? haversineKm(currentLat, currentLng, chosen.lat, chosen.lng)
+        : null;
+      chosen.distanceFromLabel = currentLabel;
+      ordered.push(chosen);
+      if (chosen.lat != null && chosen.lng != null) {
+        currentLat = chosen.lat;
+        currentLng = chosen.lng;
+        currentLabel = `drop ${chosen.order}`;
+      }
+    }
+    return { ...slot, drops: ordered, overCapacity: ordered.length > CAR_CAPACITY };
+  });
+
+  // Flat list (used elsewhere e.g. for the "N stops" header)
+  const runEvents = orderedSlots.flatMap(s => s.drops);
 
   const formatTime = (t) => {
     const h = Math.floor(t);
@@ -6421,13 +6412,14 @@ function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, 
 
   const cleanersWithBookings = [...new Set(bookingsWithCalc.map(b => b.cleaner))];
   const bookingsWithoutCoords = bookingsWithCalc.filter(b => b.location && (!b.lat || !b.lng)).length;
+  const overCapacitySlots = orderedSlots.filter(s => s.overCapacity).length;
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 className="display-font" style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Driver Schedule</h2>
-          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>{formatDate(date)} · {runEvents.length} stops</p>
+          <p style={{ margin: '4px 0 0', color: colors.ink + '99', fontSize: '13px' }}>{formatDate(date)} · {runEvents.length} drop{runEvents.length !== 1 ? 's' : ''} · {orderedSlots.length} time slot{orderedSlots.length !== 1 ? 's' : ''}</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <button className="btn" onClick={() => setShowSetup(true)}>
@@ -6452,6 +6444,29 @@ function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, 
 
       {/* Driver's shareable link — the driver bookmarks this on his phone and taps it each day */}
       <DriverLinkBox companyInfo={companyInfo} saveCompanyInfo={saveCompanyInfo} colors={colors} />
+
+      {/* Car capacity info strip */}
+      {bookingsWithCalc.length > 0 && (
+        <div style={{
+          background: 'white',
+          border: `1px solid ${colors.border}`,
+          borderRadius: '10px',
+          padding: '10px 14px',
+          marginBottom: '16px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          flexWrap: 'wrap',
+          fontSize: '13px'
+        }}>
+          <span style={{ fontSize: '20px' }}>🚗</span>
+          <span style={{ fontWeight: 700 }}>Car capacity: {CAR_CAPACITY} cleaners</span>
+          <span style={{ color: colors.ink + '99', fontSize: '12px' }}>
+            · Within each time slot, the driver visits the nearest client first.
+            {overCapacitySlots > 0 && <span style={{ color: '#DC2626', fontWeight: 700 }}> {overCapacitySlots} slot{overCapacitySlots > 1 ? 's' : ''} exceed{overCapacitySlots > 1 ? '' : 's'} capacity ⚠️</span>}
+          </span>
+        </div>
+      )}
 
       {bookingsWithCalc.length === 0 ? (
         <div style={{ background: 'white', borderRadius: '12px', border: `1px dashed ${colors.border}`, padding: '60px 20px', textAlign: 'center', color: colors.ink + '99' }}>
@@ -6487,112 +6502,171 @@ function DriverView({ bookingsWithCalc, date, formatDate, colors, cleanerHomes, 
             )}
           </div>
 
-          {/* RUN LIST */}
+          {/* ============== DROP SEQUENCE (SIMPLE) ==============
+              Just the drops. Grouped by appointment time. Within each time
+              slot, the driver visits the nearest client first. No pickup /
+              collect / return clutter. Car capacity warning per slot. */}
           <div style={{ background: 'white', borderRadius: '12px', border: `1px solid ${colors.border}`, overflow: 'hidden' }}>
-            <div style={{ padding: '12px 16px', borderBottom: `1px solid ${colors.border}` }}>
-              <h3 className="display-font" style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>🚐 Driver Run · sorted by time</h3>
+            <div style={{ padding: '14px 16px', borderBottom: `1px solid ${colors.border}` }}>
+              <h3 className="display-font" style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>🚐 Drop sequence · nearest first</h3>
+              <div style={{ fontSize: '12px', color: colors.ink + '99', marginTop: '2px' }}>
+                Within each time slot, the driver visits the nearest client first, then the next-nearest, and so on.
+              </div>
             </div>
-            <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
-              {runEvents.map((event, idx) => {
-                const color = CLEANER_COLORS[event.cleaner] || '#0F4C3A';
-                // Visual styling for each of the 4 event types
-                const typeConfig = event.type === 'PICKUP'
-                  ? { badge: '🧍 PICKUP', bg: '#FEF3C7', badgeBg: '#F59E0B', badgeColor: 'white', rowBg: '#FFF8E7' }
-                  : event.type === 'COLLECT'
-                  ? { badge: '🔄 COLLECT', bg: '#FED7AA', badgeBg: '#D97706', badgeColor: 'white', rowBg: '#FFF4E6' }
-                  : event.type === 'RETURN'
-                  ? { badge: '🏠 RETURN', bg: '#E0E7FF', badgeBg: '#6366F1', badgeColor: 'white', rowBg: '#F0F0FF' }
-                  : { badge: '📍 DROP', bg: color, badgeBg: color, badgeColor: 'white', rowBg: 'white' };
-                // "From" and "To" labels per event type
-                const fromText = event.type === 'PICKUP' || event.type === 'COLLECT' || event.type === 'RETURN'
-                  ? event.fromLabel
-                  : event.originLabel;
-                const fromAddress = event.type === 'PICKUP' || event.type === 'COLLECT' || event.type === 'RETURN'
-                  ? event.fromAddress
-                  : event.originAddress;
-                const toText = event.type === 'DROP'
-                  ? event.clientName
-                  : event.type === 'RETURN'
-                  ? 'Office / home'
-                  : null; // PICKUP and COLLECT don't need "to" — the next DROP row shows it
-                // Navigation destination = where the driver is heading NOW
-                const navAddress = event.location;
-                const navLat = event.lat;
-                const navLng = event.lng;
+            <div style={{ maxHeight: '700px', overflowY: 'auto' }}>
+              {orderedSlots.map(slot => {
+                const atCap = slot.drops.length <= CAR_CAPACITY;
                 return (
-                  <div key={idx} style={{
-                    padding: '12px 16px',
-                    borderBottom: idx < runEvents.length - 1 ? `1px solid ${colors.border}` : 'none',
-                    display: 'flex',
-                    gap: '12px',
-                    alignItems: 'flex-start',
-                    background: typeConfig.rowBg
-                  }}>
+                  <div key={slot.timeLabel} style={{ borderBottom: `3px solid ${colors.soft}` }}>
+                    {/* Time group header */}
                     <div style={{
-                      flexShrink: 0,
-                      width: '54px',
-                      textAlign: 'center',
-                      fontFamily: 'JetBrains Mono, monospace',
+                      padding: '10px 16px',
+                      background: atCap ? '#FEFCE8' : '#FEE2E2',
                       fontSize: '13px',
                       fontWeight: 700,
-                      color: colors.ink,
-                      paddingTop: '2px'
+                      color: atCap ? '#78350F' : '#991B1B',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '10px',
+                      borderBottom: `1px solid ${atCap ? '#FDE68A' : '#FCA5A5'}`
                     }}>
-                      {event.timeLabel}
+                      <span>⏰ {slot.timeLabel} AM · {slot.drops.length} client{slot.drops.length > 1 ? 's' : ''}</span>
+                      <span style={{
+                        padding: '2px 10px',
+                        background: 'white',
+                        borderRadius: '12px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        color: atCap ? '#059669' : '#DC2626'
+                      }}>
+                        {slot.drops.length} / {CAR_CAPACITY} in car {atCap ? '✓' : '⚠️'}
+                      </span>
                     </div>
-                    <div style={{
-                      flexShrink: 0,
-                      width: '4px',
-                      borderRadius: '2px',
-                      background: color,
-                      alignSelf: 'stretch',
-                      minHeight: '40px'
-                    }}></div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px', flexWrap: 'wrap' }}>
-                        <span style={{
-                          padding: '2px 8px',
-                          borderRadius: '10px',
-                          background: typeConfig.badgeBg,
-                          color: typeConfig.badgeColor,
-                          fontSize: '10px',
-                          fontWeight: 700,
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.03em'
-                        }}>
-                          {typeConfig.badge}
-                        </span>
-                        <span style={{ fontWeight: 700, fontSize: '14px', color }}>{event.cleaner}</span>
+
+                    {/* Capacity warning row */}
+                    {!atCap && (
+                      <div style={{
+                        padding: '10px 16px',
+                        background: '#FEF3C7',
+                        color: '#78350F',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        borderBottom: `1px dashed #F59E0B`,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                      }}>
+                        ⚠️ {slot.drops.length} clients at {slot.timeLabel} — car holds {CAR_CAPACITY}. Driver drops {CAR_CAPACITY} in nearest order, then comes back for the rest. Consider shifting {slot.drops.length - CAR_CAPACITY} client{slot.drops.length - CAR_CAPACITY > 1 ? 's' : ''} to a later slot.
                       </div>
-                      {/* FROM line - where the cleaner is being collected from */}
-                      {fromText && (
-                        <div style={{ fontSize: '12px', color: colors.ink + '99', marginBottom: '3px' }}>
-                          From: <strong>{fromText}</strong>
-                          {fromAddress && fromAddress !== fromText && (
-                            <span style={{ color: colors.ink + '77' }}> · {fromAddress}</span>
-                          )}
+                    )}
+
+                    {/* Drop rows */}
+                    {slot.drops.map((d, i) => {
+                      const color = CLEANER_COLORS[d.cleaner] || '#0F4C3A';
+                      const isFirstInSlot = i === 0;
+                      const hasGps = d.lat != null && d.lng != null;
+                      return (
+                        <div key={d.bookingId} style={{
+                          padding: '12px 16px',
+                          display: 'flex',
+                          gap: '12px',
+                          alignItems: 'center',
+                          borderBottom: i < slot.drops.length - 1 ? `1px solid ${colors.soft}` : 'none'
+                        }}>
+                          {/* Order number circle */}
+                          <div style={{
+                            flexShrink: 0,
+                            width: '32px',
+                            height: '32px',
+                            borderRadius: '50%',
+                            background: '#0F4C3A',
+                            color: 'white',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontWeight: 700,
+                            fontSize: '14px'
+                          }}>{d.order}</div>
+                          {/* Cleaner-colored stripe */}
+                          <div style={{
+                            flexShrink: 0,
+                            width: '4px',
+                            borderRadius: '2px',
+                            background: color,
+                            alignSelf: 'stretch',
+                            minHeight: '40px'
+                          }}></div>
+                          {/* Main content */}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
+                              <span style={{
+                                padding: '2px 8px',
+                                borderRadius: '10px',
+                                background: color,
+                                color: 'white',
+                                fontSize: '11px',
+                                fontWeight: 700
+                              }}>🧍 {d.cleaner}</span>
+                              <span style={{ fontWeight: 700, fontSize: '15px', color: colors.ink }}>{d.clientName}</span>
+                              <span style={{ fontSize: '11px', color: colors.ink + '77', fontFamily: 'JetBrains Mono, monospace' }}>{d.timing}</span>
+                            </div>
+                            <div style={{ fontSize: '12px', color: colors.ink + '99' }}>
+                              📍 {d.location}
+                              {d.phone && <span> · <a href={`tel:${d.phone}`} style={{ color: colors.ink + '99', textDecoration: 'none' }}>{d.phone}</a></span>}
+                            </div>
+                          </div>
+                          {/* Right side: distance tag + maps button */}
+                          <div style={{
+                            flexShrink: 0,
+                            textAlign: 'right',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '4px',
+                            alignItems: 'flex-end'
+                          }}>
+                            {isFirstInSlot && (
+                              <span style={{
+                                fontSize: '10px',
+                                color: '#059669',
+                                fontWeight: 700,
+                                letterSpacing: '0.02em'
+                              }}>NEAREST FIRST</span>
+                            )}
+                            {d.distanceFromPrev != null ? (
+                              <span style={{
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                color: '#78350F',
+                                background: '#FEF3C7',
+                                padding: '3px 8px',
+                                borderRadius: '6px',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                {d.distanceFromPrev.toFixed(1)} km from {d.distanceFromLabel}
+                              </span>
+                            ) : (
+                              <span style={{
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                color: '#DC2626',
+                                background: '#FEE2E2',
+                                padding: '3px 8px',
+                                borderRadius: '6px',
+                                whiteSpace: 'nowrap'
+                              }}>⚠️ No GPS pin</span>
+                            )}
+                            <button className="btn btn-sm" style={{ padding: '4px 10px', fontSize: '11px' }} onClick={() => openInGoogleMaps(d.location, d.lat, d.lng)}>
+                              <Navigation size={11} /> Maps
+                            </button>
+                          </div>
                         </div>
-                      )}
-                      {/* TO line - where the cleaner is being dropped off */}
-                      {toText && (
-                        <div style={{ fontWeight: 600, fontSize: '13px' }}>
-                          To: <strong>{toText}</strong>
-                        </div>
-                      )}
-                      <div style={{ fontSize: '12px', color: colors.ink + 'AA', margin: '2px 0' }}>{navAddress}</div>
-                      {event.phone && (
-                        <div style={{ fontSize: '11px', color: colors.ink + '99', display: 'inline-flex', alignItems: 'center', gap: '4px', marginRight: '10px' }}>
-                          <Phone size={11} /> <a href={`tel:${event.phone}`} style={{ color: colors.ink + '99', textDecoration: 'none' }}>{event.phone}</a>
-                        </div>
-                      )}
-                      <button className="btn btn-sm" style={{ marginTop: '4px', padding: '4px 8px', fontSize: '11px' }} onClick={() => openInGoogleMaps(navAddress, navLat, navLng)}>
-                        <Navigation size={11} /> Open in Maps
-                      </button>
-                    </div>
+                      );
+                    })}
                   </div>
                 );
               })}
-              {runEvents.length === 0 && (
+              {orderedSlots.length === 0 && (
                 <div style={{ padding: '40px', textAlign: 'center', color: colors.ink + '66', fontSize: '13px' }}>
                   No stops yet. Add bookings to build the driver run.
                 </div>
